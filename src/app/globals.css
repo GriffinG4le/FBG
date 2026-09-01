@@ -495,34 +495,123 @@ select.cat-select {
   font-weight: 500;
 }
 
-.size-figures {
+.stock-accordion {
+  padding: 12px 16px;
   display: flex;
-  gap: 16px;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 13px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.size-figures span {
-  color: var(--faint);
-  min-width: 44px;
-  text-align: right;
+.stock-accordion-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+
+.stock-accordion-item:hover {
+  border-color: #D1D5DB;
+}
+
+.stock-accordion-item.expanded {
+  border-color: #CBD5E1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.stock-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
   cursor: pointer;
+  user-select: none;
 }
 
-.size-figures span b {
+.stock-unit-title {
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stock-unit-color {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.stock-unit-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--faint);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.stock-unit-meta.low-stock {
+  color: var(--amber);
   font-weight: 600;
 }
 
-.size-figures span.low b {
+.stock-chevron {
+  transition: transform 0.2s ease;
+  color: var(--muted);
+}
+
+.stock-chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.stock-accordion-body {
+  padding: 8px 14px 14px;
+  border-top: 1px dashed var(--line);
+  background: #FCFCFD;
+}
+
+.stock-size-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stock-size-pill {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--panel);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Inter', sans-serif;
+  transition: all 0.15s ease;
+}
+
+.stock-size-pill:hover:not(.zero) {
+  border-color: var(--ink);
+  background: #FFFFFF;
+}
+
+.stock-size-pill b {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stock-size-pill.low b {
   color: var(--amber);
 }
 
-.size-figures span.zero {
-  opacity: 0.45;
+.stock-size-pill.zero {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg);
 }
+
 
 /* Tables & Spreadsheet Matrix */
 .data-table {

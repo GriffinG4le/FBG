@@ -114,9 +114,23 @@ export default function Dashboard() {
   const [newEventName, setNewEventName] = useState<string>('');
   const [newEventVenue, setNewEventVenue] = useState<string>('');
   const [eventDispatchEventId, setEventDispatchEventId] = useState<string>('');
-  const [eventDispatchSku, setEventDispatchSku] = useState<string>('');
+  const [eventDispatchUnitKey, setEventDispatchUnitKey] = useState<string>('');
+  const [eventDispatchSize, setEventDispatchSize] = useState<string>('');
   const [eventDispatchQty, setEventDispatchQty] = useState<string>('');
   const [eventDispatchNotes, setEventDispatchNotes] = useState<string>('');
+
+  // Accordion state for Available Stock list
+  const [expandedStockUnits, setExpandedStockUnits] = useState<Record<string, boolean>>({
+    'Fan Jersey|White': true,
+    'Fan Jersey|Red': true
+  });
+
+  const toggleStockUnit = (unitKey: string) => {
+    setExpandedStockUnits(prev => ({
+      ...prev,
+      [unitKey]: !prev[unitKey]
+    }));
+  };
 
   // Tent Staff Closeout Count Modal
   const [tentModalOpen, setTentModalOpen] = useState<boolean>(false);
@@ -264,6 +278,114 @@ export default function Dashboard() {
       return a.localeCompare(b);
     });
   }, [catalog, selectedCategory, selectedColor]);
+
+  // Grouped Available Stock Units for Active Location (Accordion Display)
+  const groupedStockUnits = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      category: string;
+      color: string;
+      totalStock: number;
+      lowStockCount: number;
+      items: StockOnHandItem[];
+    }>();
+
+    const filtered = stockOnHand.filter(s => s.location_id === selectedLocationId && (stockViewCategory === 'all' || s.category === stockViewCategory));
+
+    for (const s of filtered) {
+      const key = `${s.category}|${s.color || 'Standard'}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          category: s.category,
+          color: s.color || 'Standard',
+          totalStock: 0,
+          lowStockCount: 0,
+          items: []
+        });
+      }
+      const grp = map.get(key)!;
+      grp.totalStock += s.stock_on_hand;
+      if (s.stock_on_hand > 0 && s.stock_on_hand <= s.low_stock_threshold) {
+        grp.lowStockCount++;
+      }
+      grp.items.push(s);
+    }
+
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
+    for (const grp of map.values()) {
+      grp.items.sort((a, b) => {
+        const idxA = sizeOrder.indexOf(a.size || 'One Size');
+        const idxB = sizeOrder.indexOf(b.size || 'One Size');
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        return (a.size || '').localeCompare(b.size || '');
+      });
+    }
+
+    return Array.from(map.values());
+  }, [stockOnHand, selectedLocationId, stockViewCategory]);
+
+  // Warehouse Grouped Units & Sizes for Outbound Event Dispatch
+  const warehouseGroupedUnits = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      category: string;
+      color: string;
+      totalStock: number;
+      items: StockOnHandItem[];
+    }>();
+
+    const whStock = stockOnHand.filter(s => s.location_id === 'wh-main' && s.stock_on_hand > 0);
+    for (const s of whStock) {
+      const key = `${s.category}|${s.color || 'Standard'}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          category: s.category,
+          color: s.color || 'Standard',
+          totalStock: 0,
+          items: []
+        });
+      }
+      const grp = map.get(key)!;
+      grp.totalStock += s.stock_on_hand;
+      grp.items.push(s);
+    }
+    return Array.from(map.values());
+  }, [stockOnHand]);
+
+  // Available Sizes for the selected Dispatch Unit
+  const availableSizesForDispatchUnit = useMemo(() => {
+    if (!eventDispatchUnitKey) return [];
+    const grp = warehouseGroupedUnits.find(g => g.key === eventDispatchUnitKey);
+    if (!grp) return [];
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
+    return [...grp.items].sort((a, b) => {
+      const idxA = sizeOrder.indexOf(a.size || 'One Size');
+      const idxB = sizeOrder.indexOf(b.size || 'One Size');
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      return (a.size || '').localeCompare(b.size || '');
+    });
+  }, [warehouseGroupedUnits, eventDispatchUnitKey]);
+
+  // Set default dispatch unit if none selected
+  useEffect(() => {
+    if (warehouseGroupedUnits.length > 0 && !eventDispatchUnitKey) {
+      setEventDispatchUnitKey(warehouseGroupedUnits[0].key);
+      if (warehouseGroupedUnits[0].items.length > 0) {
+        setEventDispatchSize(warehouseGroupedUnits[0].items[0].size || 'One Size');
+      }
+    }
+  }, [warehouseGroupedUnits, eventDispatchUnitKey]);
+
+  useEffect(() => {
+    if (availableSizesForDispatchUnit.length > 0) {
+      if (!availableSizesForDispatchUnit.some(s => (s.size || 'One Size') === eventDispatchSize)) {
+        setEventDispatchSize(availableSizesForDispatchUnit[0].size || 'One Size');
+      }
+    }
+  }, [availableSizesForDispatchUnit, eventDispatchSize]);
+
 
   // Current SKU Selection & Auto-Price
   const currentSelectedSku = useMemo(() => {
@@ -598,10 +720,11 @@ export default function Dashboard() {
       alert("Please select a destination event.");
       return;
     }
-    if (!eventDispatchSku) {
-      alert("Please select an item to dispatch.");
+    if (!eventDispatchUnitKey || !eventDispatchSize) {
+      alert("Please select a merchandise unit and size to dispatch.");
       return;
     }
+    const finalSku = `${eventDispatchUnitKey}|${eventDispatchSize}`;
     const qty = parseInt(eventDispatchQty, 10) || 0;
     if (qty <= 0) {
       alert("Please enter a valid dispatch quantity (> 0).");
@@ -612,13 +735,12 @@ export default function Dashboard() {
       try {
         await dispatchBatchToEventAction(
           eventDispatchEventId,
-          [{ sku: eventDispatchSku, quantity: qty }],
+          [{ sku: finalSku, quantity: qty }],
           'Admin',
           eventDispatchNotes.trim() || 'Outbound event allocation'
         );
         const eventName = locations.find(l => l.id === eventDispatchEventId)?.name || eventDispatchEventId;
-        alert(`Stock Dispatched: ${qty} units of ${eventDispatchSku} sent to ${eventName}.`);
-        setEventDispatchSku('');
+        alert(`Stock Dispatched: ${qty} units of ${finalSku} sent to ${eventName}.`);
         setEventDispatchQty('');
         setEventDispatchNotes('');
         loadAllData();
@@ -1218,7 +1340,7 @@ export default function Dashboard() {
             </form>
           </div>
 
-          {/* Right Column: Available Stock Ledger */}
+          {/* Right Column: Available Stock Ledger Accordion */}
           <div className="card">
             <div className="ledger-head">
               <span className="title">Available stock</span>
@@ -1237,52 +1359,75 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div>
-              {availableCategories
-                .filter(cat => stockViewCategory === 'all' || stockViewCategory === cat)
-                .map(cat => {
-                  const catItems = stockOnHand.filter(s => s.location_id === selectedLocationId && s.category === cat);
-                  if (catItems.length === 0) return null;
+            <div className="stock-accordion">
+              {groupedStockUnits.map(grp => {
+                const isExpanded = !!expandedStockUnits[grp.key];
+                const hasLowStock = grp.lowStockCount > 0;
 
-                  const colors = [...new Set(catItems.map(c => c.color || 'Standard'))];
-
-                  return (
-                    <div key={cat} className="category-block">
-                      <div className="category-title">{cat}</div>
-
-                      {colors.map(col => {
-                        const colItems = catItems.filter(c => (c.color || 'Standard') === col);
-
-                        return (
-                          <div key={col} className="color-row">
-                            <span className="color-name">{col}</span>
-                            <div className="size-figures">
-                              {colItems.map(item => {
-                                const isZero = item.stock_on_hand <= 0;
-                                const isLow = item.stock_on_hand <= item.low_stock_threshold && !isZero;
-
-                                return (
-                                  <span
-                                    key={item.sku}
-                                    className={`${isLow ? 'low' : ''} ${isZero ? 'zero' : ''}`}
-                                    onClick={() => {
-                                      setSelectedCategory(cat);
-                                      setSelectedColor(col);
-                                      setSelectedSize(item.size || 'One Size');
-                                    }}
-                                    title="Click to select in form"
-                                  >
-                                    {item.size || 'Std'} <b>{item.stock_on_hand}</b>
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
+                return (
+                  <div key={grp.key} className={`stock-accordion-item ${isExpanded ? 'expanded' : ''}`}>
+                    <div
+                      className="stock-accordion-header"
+                      onClick={() => toggleStockUnit(grp.key)}
+                    >
+                      <div className="stock-unit-title">
+                        <span>{grp.category}</span>
+                        {grp.color && grp.color !== 'Standard' && (
+                          <span className="stock-unit-color">{grp.color}</span>
+                        )}
+                      </div>
+                      <div className={`stock-unit-meta ${hasLowStock ? 'low-stock' : ''}`}>
+                        <span>
+                          {grp.totalStock} units
+                          {hasLowStock && ` · ${grp.lowStockCount} low`}
+                        </span>
+                        <svg
+                          className={`stock-chevron ${isExpanded ? 'rotated' : ''}`}
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                      </div>
                     </div>
-                  );
-                })}
+
+                    {isExpanded && (
+                      <div className="stock-accordion-body">
+                        <div className="stock-size-grid">
+                          {grp.items.map(item => {
+                            const isZero = item.stock_on_hand <= 0;
+                            const isLow = item.stock_on_hand <= item.low_stock_threshold && !isZero;
+
+                            return (
+                              <div
+                                key={item.sku}
+                                className={`stock-size-pill ${isLow ? 'low' : ''} ${isZero ? 'zero' : ''}`}
+                                onClick={() => {
+                                  if (!isZero) {
+                                    setSelectedCategory(grp.category);
+                                    setSelectedColor(grp.color);
+                                    setSelectedSize(item.size || 'One Size');
+                                  }
+                                }}
+                                title={isZero ? 'Out of stock' : 'Click to select in log form'}
+                              >
+                                <span>{item.size || 'One Size'}</span>
+                                <b>{item.stock_on_hand}</b>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -1345,23 +1490,42 @@ export default function Dashboard() {
                 </div>
 
                 <div className="field">
-                  <span className="field-label">Select SKU</span>
+                  <span className="field-label">Available Unit</span>
                   <select
                     className="plain"
-                    value={eventDispatchSku}
-                    onChange={(e) => setEventDispatchSku(e.target.value)}
+                    value={eventDispatchUnitKey}
+                    onChange={(e) => {
+                      const newKey = e.target.value;
+                      setEventDispatchUnitKey(newKey);
+                      const grp = warehouseGroupedUnits.find(g => g.key === newKey);
+                      if (grp && grp.items.length > 0) {
+                        setEventDispatchSize(grp.items[0].size || 'One Size');
+                      }
+                    }}
                     required
                   >
-                    <option value="">Select warehouse stock...</option>
-                    {catalog.map(c => {
-                      const whItem = stockOnHand.find(s => s.location_id === 'wh-main' && s.sku === c.sku);
-                      const qty = whItem ? whItem.stock_on_hand : 0;
-                      return (
-                        <option key={c.sku} value={c.sku}>
-                          {c.sku} ({qty} pcs in WH)
-                        </option>
-                      );
-                    })}
+                    <option value="">Choose available merchandise...</option>
+                    {warehouseGroupedUnits.map(g => (
+                      <option key={g.key} value={g.key}>
+                        {g.category} {g.color !== 'Standard' ? g.color : ''} ({g.totalStock} units in WH)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Select Size</span>
+                  <select
+                    className="plain"
+                    value={eventDispatchSize}
+                    onChange={(e) => setEventDispatchSize(e.target.value)}
+                    required
+                  >
+                    {availableSizesForDispatchUnit.map(s => (
+                      <option key={s.sku} value={s.size || 'One Size'}>
+                        {s.size || 'One Size'} ({s.stock_on_hand} pcs available)
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -1370,7 +1534,7 @@ export default function Dashboard() {
                   <input
                     type="number"
                     min="1"
-                    placeholder="e.g. 50"
+                    placeholder="e.g. 20"
                     value={eventDispatchQty}
                     onChange={(e) => setEventDispatchQty(e.target.value)}
                     style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
