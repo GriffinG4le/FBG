@@ -24,6 +24,7 @@ import {
   fulfillOrder,
   quickWalkUpFulfill,
   importTikoHubOrders,
+  clearAllData,
   resetDatabase,
   Location,
   CatalogItem,
@@ -307,6 +308,15 @@ export async function importTikoHubOrdersAction(
   } catch (error) {
     console.error("Failed to import orders:", error);
     throw new Error("Failed to import TikoHub orders.");
+  }
+}
+
+export async function clearAllDataAction(): Promise<void> {
+  try {
+    return await clearAllData();
+  } catch (error) {
+    console.error("Failed to clear database:", error);
+    throw new Error("Failed to clear data.");
   }
 }
 

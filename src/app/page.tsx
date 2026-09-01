@@ -23,6 +23,7 @@ import {
   fulfillOrderAction,
   quickWalkUpFulfillAction,
   importTikoHubOrdersAction,
+  clearAllDataAction,
   resetDatabaseAction
 } from './actions';
 import {
@@ -940,8 +941,22 @@ export default function Dashboard() {
     });
   };
 
+  const handleClearAllData = async () => {
+    if (confirm("DANGER: This will wipe ALL orders, fulfillments, ledger stock movements, event transfers, and catalog variants to give you a 100% clean database for live deployment. Proceed?")) {
+      try {
+        await clearAllDataAction();
+        clearOfflineQueue();
+        alert("All operational data cleared! Database is completely clean and ready for live use.");
+        loadAllData();
+        updateQueueCount();
+      } catch (err) {
+        alert("Failed to clear data.");
+      }
+    }
+  };
+
   const handleDbReset = async () => {
-    if (confirm("WARNING: This will reset all orders, fulfillments, prefixes, and stock ledger to clean standard seeds. Proceed?")) {
+    if (confirm("WARNING: This will reset all orders, fulfillments, prefixes, and stock ledger to standard SportPesa 7s seed data. Proceed?")) {
       try {
         await resetDatabaseAction();
         clearOfflineQueue();
@@ -2072,19 +2087,29 @@ export default function Dashboard() {
           </div>
 
           <div className="card">
-            <div className="card-head">Developer reset</div>
+            <div className="card-head">Database management & deployment tools</div>
             <div className="form">
               <p style={{ fontSize: '13px', color: 'var(--muted)', margin: '0 0 14px 0' }}>
-                Reset orders, fulfillments, and stock ledger to clean standard seeds.
+                Prepare the database for real-world deployment or restore sample demo scenarios.
               </p>
-              <button
-                type="button"
-                onClick={handleDbReset}
-                className="submit"
-                style={{ background: 'var(--amber)', width: 'auto', padding: '8px 16px' }}
-              >
-                Reset database
-              </button>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleClearAllData}
+                  className="submit"
+                  style={{ background: '#DC2626', width: 'auto', padding: '9px 18px' }}
+                >
+                  Clear all data for live practical run
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDbReset}
+                  className="submit"
+                  style={{ background: 'var(--amber)', width: 'auto', padding: '9px 18px' }}
+                >
+                  Restore SportPesa 7s sample data
+                </button>
+              </div>
             </div>
           </div>
         </div>

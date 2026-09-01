@@ -1160,6 +1160,28 @@ export async function importTikoHubOrders(
   };
 }
 
+export async function clearAllData(): Promise<void> {
+  try {
+    await supabase.from('fulfillments').delete().neq('order_ref', 'never_match_xyz');
+    await supabase.from('ledger').delete().neq('staff_id', 'never_match_xyz');
+    await supabase.from('event_transfers').delete().neq('id', 'never_match_xyz');
+    await supabase.from('orders').delete().neq('order_ref', 'never_match_xyz');
+    await supabase.from('catalog').delete().neq('sku', 'never_match_xyz');
+    await supabase.from('locations').delete().neq('id', 'wh-main');
+  } catch (e) {
+    console.warn("Supabase clear failed, clearing memory store:", e);
+  }
+
+  memoryOrders = [];
+  memoryFulfillments = [];
+  memoryLedger = [];
+  memoryEventTransfers = [];
+  memoryCatalog = [];
+  memoryLocations = [
+    { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() }
+  ];
+}
+
 export async function resetDatabase(): Promise<void> {
   try {
     await supabase.from('fulfillments').delete().neq('order_ref', 'never_match_xyz');
@@ -1184,4 +1206,6 @@ export async function resetDatabase(): Promise<void> {
   memoryOrders = [...INITIAL_ORDERS];
   memoryFulfillments = [];
   memoryLedger = [...INITIAL_LEDGER];
+  memoryEventTransfers = [...INITIAL_EVENT_TRANSFERS];
 }
+
