@@ -3,6 +3,7 @@
 import { useState, useEffect, useTransition, useMemo } from 'react';
 import {
   getLocationsAction,
+  createEventLocationAction,
   getOrderPrefixesAction,
   updateOrderPrefixLabelAction,
   getCatalogAction,
@@ -15,6 +16,10 @@ import {
   logDynamicWarehouseStockInAction,
   logBatchWarehouseStockInAction,
   allocateStockTransferAction,
+  getEventTransfersAction,
+  dispatchBatchToEventAction,
+  submitTentStaffReturnCountAction,
+  verifyWarehouseReturnIntakeAction,
   fulfillOrderAction,
   quickWalkUpFulfillAction,
   importTikoHubOrdersAction,
@@ -27,7 +32,8 @@ import {
   Order,
   Fulfillment,
   LedgerRow,
-  StockOnHandItem
+  StockOnHandItem,
+  EventStockTransfer
 } from '../lib/db';
 import { parseTikoHubCSV, ParseResult } from '../lib/csvParser';
 import {
@@ -37,7 +43,7 @@ import {
   clearOfflineQueue
 } from '../lib/offlineQueue';
 
-type NavigationTab = 'dashboard' | 'fulfillment' | 'stock' | 'importer' | 'reports';
+type NavigationTab = 'dashboard' | 'fulfillment' | 'events' | 'stock' | 'importer' | 'reports';
 
 // Notes annotation metadata from event spreadsheet
 const SPREADSHEET_NOTES: Record<string, string> = {
@@ -59,6 +65,7 @@ export default function Dashboard() {
   const [fulfillments, setFulfillments] = useState<Fulfillment[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [stockOnHand, setStockOnHand] = useState<StockOnHandItem[]>([]);
+  const [eventTransfers, setEventTransfers] = useState<EventStockTransfer[]>([]);
 
   // Connectivity & Offline Queue
   const [isOnline, setIsOnline] = useState<boolean>(true);
@@ -83,21 +90,6 @@ export default function Dashboard() {
   // Right-side category filter for available stock ledger
   const [stockViewCategory, setStockViewCategory] = useState<string>('all');
 
-  // Admin Catalog Manager Form
-  const [newCatalogCategory, setNewCatalogCategory] = useState<string>('Fan Jersey');
-  const [newCatalogColor, setNewCatalogColor] = useState<string>('White');
-  const [newCatalogSize, setNewCatalogSize] = useState<string>('M');
-  const [newCatalogPrice, setNewCatalogPrice] = useState<number>(2500);
-  const [newCatalogThreshold, setNewCatalogThreshold] = useState<number>(10);
-
-  // Modals
-  const [swapModalOpen, setSwapModalOpen] = useState<boolean>(false);
-  const [swapOrder, setSwapOrder] = useState<Order | null>(null);
-  const [selectedSwapSku, setSelectedSwapSku] = useState<string>('');
-  const [swapCashOverride, setSwapCashOverride] = useState<string>('');
-  const [swapOverrideReason, setSwapOverrideReason] = useState<string>('');
-  const [swapNotes, setSwapNotes] = useState<string>('');
-
   // Dynamic Warehouse Stock-In Form (Blank by default on deployment)
   const [stockInMode, setStockInMode] = useState<'single' | 'multi'>('single');
   const [stockInCategory, setStockInCategory] = useState<string>('');
@@ -118,19 +110,39 @@ export default function Dashboard() {
     { size: '5XL', quantity: '' }
   ]);
 
-  // Dynamic Stock Transfer Form (Blank by default)
-  const [transferSku, setTransferSku] = useState<string>('');
-  const [transferQty, setTransferQty] = useState<string>('');
-  const [transferDestLocation, setTransferDestLocation] = useState<string>('evt-sp7s');
-  const [transferNotes, setTransferNotes] = useState<string>('');
+  // Event Lifecycle States
+  const [newEventName, setNewEventName] = useState<string>('');
+  const [newEventVenue, setNewEventVenue] = useState<string>('');
+  const [eventDispatchEventId, setEventDispatchEventId] = useState<string>('');
+  const [eventDispatchSku, setEventDispatchSku] = useState<string>('');
+  const [eventDispatchQty, setEventDispatchQty] = useState<string>('');
+  const [eventDispatchNotes, setEventDispatchNotes] = useState<string>('');
+
+  // Tent Staff Closeout Count Modal
+  const [tentModalOpen, setTentModalOpen] = useState<boolean>(false);
+  const [tentModalEventId, setTentModalEventId] = useState<string>('');
+  const [tentCountRows, setTentCountRows] = useState<{ sku: string; staffCount: string; expectedQty: number }[]>([]);
+  const [tentCountStaffName, setTentCountStaffName] = useState<string>('');
+  const [tentCountNotes, setTentCountNotes] = useState<string>('');
+
+  // Warehouse Verification Modal
+  const [whVerifyModalOpen, setWhVerifyModalOpen] = useState<boolean>(false);
+  const [whVerifyEventId, setWhVerifyEventId] = useState<string>('');
+  const [whVerifyRows, setWhVerifyRows] = useState<{ sku: string; staffCount: number; whCount: string; expectedQty: number }[]>([]);
+  const [whVerifyStaffName, setWhVerifyStaffName] = useState<string>('');
+  const [whVerifyNotes, setWhVerifyNotes] = useState<string>('');
+
+  // Modals for swaps
+  const [swapModalOpen, setSwapModalOpen] = useState<boolean>(false);
+  const [swapOrder, setSwapOrder] = useState<Order | null>(null);
+  const [selectedSwapSku, setSelectedSwapSku] = useState<string>('');
+  const [swapCashOverride, setSwapCashOverride] = useState<string>('');
+  const [swapOverrideReason, setSwapOverrideReason] = useState<string>('');
+  const [swapNotes, setSwapNotes] = useState<string>('');
 
   // CSV Importer
   const [csvFileName, setCsvFileName] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
-
-  // Prefix Management Editing
-  const [editingPrefix, setEditingPrefix] = useState<string | null>(null);
-  const [editingPrefixLabel, setEditingPrefixLabel] = useState<string>('');
 
   const [isPending, startTransition] = useTransition();
 
@@ -166,14 +178,15 @@ export default function Dashboard() {
 
   const loadAllData = async () => {
     try {
-      const [locs, prefs, cats, ords, fuls, leds, stocks] = await Promise.all([
+      const [locs, prefs, cats, ords, fuls, leds, stocks, etrans] = await Promise.all([
         getLocationsAction(),
         getOrderPrefixesAction(),
         getCatalogAction(),
         getOrdersAction(),
         getFulfillmentsAction(),
         getLedgerAction(),
-        getDerivedStockOnHandAction()
+        getDerivedStockOnHandAction(),
+        getEventTransfersAction()
       ]);
 
       setLocations(locs);
@@ -183,6 +196,11 @@ export default function Dashboard() {
       setFulfillments(fuls);
       setLedger(leds);
       setStockOnHand(stocks);
+      setEventTransfers(etrans);
+
+      if (locs.filter(l => l.type === 'event').length > 0 && !eventDispatchEventId) {
+        setEventDispatchEventId(locs.filter(l => l.type === 'event')[0].id);
+      }
     } catch (err) {
       console.error("Error loading application data:", err);
     }
@@ -234,10 +252,10 @@ export default function Dashboard() {
   }, [catalog, selectedCategory]);
 
   const availableSizesForSelectedCategoryColor = useMemo(() => {
-    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None'];
+    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
     const sizes = catalog
       .filter(c => c.category === selectedCategory && (c.color || 'Standard') === selectedColor)
-      .map(c => c.size || 'None');
+      .map(c => c.size || 'One Size');
     
     return [...new Set(sizes)].sort((a, b) => {
       const idxA = order.indexOf(a);
@@ -256,7 +274,7 @@ export default function Dashboard() {
     const item = catalog.find(c => 
       c.category === selectedCategory && 
       (c.color || 'Standard') === selectedColor && 
-      (c.size || 'None') === selectedSize
+      (c.size || 'One Size') === selectedSize
     );
     return item ? item.price : 2500;
   }, [catalog, selectedCategory, selectedColor, selectedSize]);
@@ -270,14 +288,14 @@ export default function Dashboard() {
     const colors = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
     if (colors.length > 0) {
       setSelectedColor(colors[0]);
-      const sizes = catalog.filter(c => c.category === cat && (c.color || 'Standard') === colors[0]).map(c => c.size || 'None');
+      const sizes = catalog.filter(c => c.category === cat && (c.color || 'Standard') === colors[0]).map(c => c.size || 'One Size');
       if (sizes.length > 0) setSelectedSize(sizes[0]);
     }
   };
 
   const handleColorChange = (col: string) => {
     setSelectedColor(col);
-    const sizes = catalog.filter(c => c.category === selectedCategory && (c.color || 'Standard') === col).map(c => c.size || 'None');
+    const sizes = catalog.filter(c => c.category === selectedCategory && (c.color || 'Standard') === col).map(c => c.size || 'One Size');
     if (sizes.length > 0) setSelectedSize(sizes[0]);
   };
 
@@ -301,12 +319,10 @@ export default function Dashboard() {
   // GOOGLE SHEET ACCURATE DASHBOARD CALCULATIONS
   // =========================================================================
 
-  // 1. Stock by Size & Color Breakdown
   const sizeColorBreakdown = useMemo(() => {
     const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
     const colorOrder = ['White', 'Red'];
 
-    // Map each size and color for Fan Jersey
     const rows = [];
     let sumReceived = 0;
     let sumDelivered = 0;
@@ -317,22 +333,17 @@ export default function Dashboard() {
       for (const col of colorOrder) {
         const sku = `Fan Jersey|${col}|${sz}`;
 
-        // Stock Received at this location (all positive entries in ledger)
         const received = ledger
           .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta > 0)
           .reduce((sum, l) => sum + l.quantity_delta, 0);
 
-        // Delivered (all dispatches at this location)
         const delivered = Math.abs(
           ledger
             .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta < 0 && l.type === 'Dispatch')
             .reduce((sum, l) => sum + l.quantity_delta, 0)
         );
 
-        // Not Delivered (Pending unfulfilled orders for this SKU)
         const notDelivered = orders.filter(o => o.status === 'pending' && o.original_sku === sku).length;
-
-        // Remaining Stock (Available Stock = Received - Delivered - Not Delivered)
         const remaining = received - delivered - notDelivered;
 
         sumReceived += received;
@@ -366,7 +377,6 @@ export default function Dashboard() {
     };
   }, [ledger, orders, selectedLocationId]);
 
-  // 2. Sales Breakdown by Payment Channel
   const paymentChannelSales = useMemo(() => {
     const channels = [
       { name: 'Online (Site Checkout)', count: 411, revenue: 1027500 },
@@ -376,7 +386,6 @@ export default function Dashboard() {
       { name: 'Free', count: 43, revenue: 107500 }
     ];
 
-    // Factor in any new live walk-ups logged in this session
     const sessionWalkUps = fulfillments.filter(f => !f.id.startsWith('ful-f'));
     const liveCardCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Card').length;
     const liveEventCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Event').length;
@@ -397,7 +406,7 @@ export default function Dashboard() {
     };
   }, [fulfillments, orders]);
 
-  // Dispatch Action
+  // Main Dispatch Action
   const handleLogAndDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!logOrderRef.trim()) {
@@ -485,6 +494,238 @@ export default function Dashboard() {
     }
   };
 
+  // Submit Dynamic Warehouse Stock-In
+  const handleStockInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stockInCategory.trim()) {
+      alert("Please enter the merchandise item name / category (e.g. Bucket Hat, Concert Merch, Crewneck Jersey).");
+      return;
+    }
+    if (!stockInColor.trim()) {
+      alert("Please enter the colourway (e.g. Beige, Black, White, Red).");
+      return;
+    }
+
+    const price = parseFloat(stockInPrice) || 2500;
+
+    startTransition(async () => {
+      try {
+        if (stockInMode === 'single') {
+          const qty = parseInt(stockInSingleQty, 10) || 0;
+          if (qty <= 0) {
+            alert("Please enter a valid received quantity (> 0).");
+            return;
+          }
+
+          await logDynamicWarehouseStockInAction({
+            category: stockInCategory.trim(),
+            color: stockInColor.trim(),
+            size: stockInSingleSize.trim() || 'One Size',
+            price,
+            quantity: qty,
+            locationId: 'wh-main',
+            staffId: 'Warehouse Staff',
+            notes: stockInNotes.trim() || `Warehouse stock intake for ${stockInCategory.trim()}`
+          });
+
+          alert(`Stock-In Recorded: +${qty} units of ${stockInCategory.trim()} (${stockInColor.trim()} / ${stockInSingleSize.trim()}) added to Main Warehouse.`);
+        } else {
+          const variants = stockInMultiSizes
+            .map(s => ({ size: s.size, quantity: parseInt(s.quantity, 10) || 0 }))
+            .filter(v => v.quantity > 0);
+
+          if (variants.length === 0) {
+            alert("Please enter a quantity for at least one size.");
+            return;
+          }
+
+          const totalQty = variants.reduce((sum, v) => sum + v.quantity, 0);
+
+          await logBatchWarehouseStockInAction({
+            category: stockInCategory.trim(),
+            color: stockInColor.trim(),
+            price,
+            variants,
+            locationId: 'wh-main',
+            staffId: 'Warehouse Staff',
+            notes: stockInNotes.trim() || `Batch intake for ${stockInCategory.trim()} (${totalQty} units total)`
+          });
+
+          alert(`Batch Stock-In Recorded: +${totalQty} units of ${stockInCategory.trim()} (${stockInColor.trim()}) across ${variants.length} sizes added to Main Warehouse.`);
+        }
+
+        setStockInCategory('');
+        setStockInColor('');
+        setStockInPrice('');
+        setStockInSingleQty('');
+        setStockInNotes('');
+        setStockInMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
+
+        loadAllData();
+      } catch (err) {
+        alert(`Stock-in failed: ${(err as Error).message}`);
+      }
+    });
+  };
+
+  // Create Event Action
+  const handleCreateEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEventName.trim()) {
+      alert("Please enter an event name (e.g. Kabras 7s, Blankets & Wine).");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        const newLoc = await createEventLocationAction(newEventName.trim(), newEventVenue.trim());
+        alert(`Event Station Created: ${newLoc.name}`);
+        setNewEventName('');
+        setNewEventVenue('');
+        setEventDispatchEventId(newLoc.id);
+        setSelectedLocationId(newLoc.id);
+        loadAllData();
+      } catch (err) {
+        alert(`Failed to create event station.`);
+      }
+    });
+  };
+
+  // Dispatch Stock to Event Action
+  const handleDispatchStockToEvent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!eventDispatchEventId) {
+      alert("Please select a destination event.");
+      return;
+    }
+    if (!eventDispatchSku) {
+      alert("Please select an item to dispatch.");
+      return;
+    }
+    const qty = parseInt(eventDispatchQty, 10) || 0;
+    if (qty <= 0) {
+      alert("Please enter a valid dispatch quantity (> 0).");
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await dispatchBatchToEventAction(
+          eventDispatchEventId,
+          [{ sku: eventDispatchSku, quantity: qty }],
+          'Admin',
+          eventDispatchNotes.trim() || 'Outbound event allocation'
+        );
+        const eventName = locations.find(l => l.id === eventDispatchEventId)?.name || eventDispatchEventId;
+        alert(`Stock Dispatched: ${qty} units of ${eventDispatchSku} sent to ${eventName}.`);
+        setEventDispatchSku('');
+        setEventDispatchQty('');
+        setEventDispatchNotes('');
+        loadAllData();
+      } catch (err) {
+        alert(`Dispatch failed: ${(err as Error).message}`);
+      }
+    });
+  };
+
+  // Open Tent Staff Return Count Modal
+  const openTentCloseoutModal = (eventId: string) => {
+    setTentModalEventId(eventId);
+    // Find all SKUs currently held or allocated to this event
+    const eventItems = stockOnHand.filter(s => s.location_id === eventId);
+    const rows = eventItems.map(item => ({
+      sku: item.sku,
+      expectedQty: item.stock_on_hand,
+      staffCount: item.stock_on_hand.toString()
+    }));
+
+    setTentCountRows(rows);
+    setTentCountStaffName('');
+    setTentCountNotes('');
+    setTentModalOpen(true);
+  };
+
+  // Submit Tent Staff Return Count
+  const handleTentCloseoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (tentCountRows.length === 0) return;
+
+    const payload = tentCountRows.map(r => ({
+      sku: r.sku,
+      staffCount: parseInt(r.staffCount, 10) || 0
+    }));
+
+    startTransition(async () => {
+      try {
+        await submitTentStaffReturnCountAction(
+          tentModalEventId,
+          payload,
+          tentCountStaffName.trim() || 'Tent Staff',
+          tentCountNotes.trim()
+        );
+        alert(`Event Stock Handover Logged! Status is now: In Transit to Warehouse.`);
+        setTentModalOpen(false);
+        loadAllData();
+      } catch (err) {
+        alert(`Failed to log return count.`);
+      }
+    });
+  };
+
+  // Open Warehouse Verification Modal
+  const openWhVerifyModal = (eventId: string) => {
+    setWhVerifyEventId(eventId);
+    const transfers = eventTransfers.filter(t => t.event_id === eventId);
+    const eventStock = stockOnHand.filter(s => s.location_id === eventId);
+
+    // Build comparison rows
+    const uniqueSkus = [...new Set([...transfers.map(t => t.sku), ...eventStock.map(s => s.sku)])];
+    const rows = uniqueSkus.map(sku => {
+      const trans = transfers.find(t => t.sku === sku);
+      const stock = eventStock.find(s => s.sku === sku)?.stock_on_hand || 0;
+      const staffCount = trans?.tent_staff_return_count ?? stock;
+
+      return {
+        sku,
+        staffCount,
+        whCount: staffCount.toString(),
+        expectedQty: stock
+      };
+    });
+
+    setWhVerifyRows(rows);
+    setWhVerifyStaffName('');
+    setWhVerifyNotes('');
+    setWhVerifyModalOpen(true);
+  };
+
+  // Submit Warehouse Verification & Closeout
+  const handleWhVerifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (whVerifyRows.length === 0) return;
+
+    const payload = whVerifyRows.map(r => ({
+      sku: r.sku,
+      whCount: parseInt(r.whCount, 10) || 0
+    }));
+
+    startTransition(async () => {
+      try {
+        await verifyWarehouseReturnIntakeAction(
+          whVerifyEventId,
+          payload,
+          whVerifyStaffName.trim() || 'Warehouse Rep',
+          whVerifyNotes.trim()
+        );
+        alert(`Warehouse Verification Complete! Stock successfully added back to Main Warehouse.`);
+        setWhVerifyModalOpen(false);
+        loadAllData();
+      } catch (err) {
+        alert(`Failed to verify warehouse return intake.`);
+      }
+    });
+  };
+
   // Open Swap Modal
   const openSwapModal = (order: Order) => {
     setSwapOrder(order);
@@ -527,32 +768,7 @@ export default function Dashboard() {
       notes: `Swapped to ${selectedSwapSku}. ${swapNotes}`
     };
 
-    const optimisticFulfillment: Fulfillment = {
-      id: 'temp-ful-' + Date.now(),
-      order_id: swapOrder.id,
-      source_prefix: swapOrder.source_prefix,
-      order_ref: swapOrder.order_ref,
-      original_sku: swapOrder.original_sku,
-      actual_sku: selectedSwapSku,
-      price_delta: computedSwapDelta,
-      cash_collected: finalCashCollected,
-      override_reason: payload.overrideReason,
-      location_id: selectedLocationId,
-      staff_id: 'Staff',
-      notes: payload.notes,
-      fulfilled_at: new Date().toISOString()
-    };
-
     setOrders(prev => prev.map(o => o.id === swapOrder.id ? { ...o, status: 'fulfilled' } : o));
-    setFulfillments(prev => [optimisticFulfillment, ...prev]);
-
-    setStockOnHand(prev => prev.map(s => {
-      if (s.location_id === selectedLocationId && s.sku === selectedSwapSku) {
-        return { ...s, stock_on_hand: s.stock_on_hand - 1 };
-      }
-      return s;
-    }));
-
     setSwapModalOpen(false);
     setSwapOrder(null);
 
@@ -568,143 +784,6 @@ export default function Dashboard() {
       enqueueOfflineAction('fulfill', payload);
       updateQueueCount();
     }
-  };
-
-  // Submit Warehouse Stock-In
-  const handleStockInSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stockInCategory.trim()) {
-      alert("Please enter the merchandise item name / category (e.g. Bucket Hat, Concert Merch, Crewneck Jersey).");
-      return;
-    }
-    if (!stockInColor.trim()) {
-      alert("Please enter the colourway (e.g. Beige, Black, White, Red).");
-      return;
-    }
-
-    const price = parseFloat(stockInPrice) || 2500;
-
-    startTransition(async () => {
-      try {
-        if (stockInMode === 'single') {
-          const qty = parseInt(stockInSingleQty, 10) || 0;
-          if (qty <= 0) {
-            alert("Please enter a valid received quantity (> 0).");
-            return;
-          }
-
-          await logDynamicWarehouseStockInAction({
-            category: stockInCategory.trim(),
-            color: stockInColor.trim(),
-            size: stockInSingleSize.trim() || 'One Size',
-            price,
-            quantity: qty,
-            locationId: 'wh-main',
-            staffId: 'Warehouse Staff',
-            notes: stockInNotes.trim() || `Warehouse stock intake for ${stockInCategory.trim()}`
-          });
-
-          alert(`Stock-In Recorded: +${qty} units of ${stockInCategory.trim()} (${stockInColor.trim()} / ${stockInSingleSize.trim()}) added to Main Warehouse.`);
-        } else {
-          // Multi-size matrix
-          const variants = stockInMultiSizes
-            .map(s => ({ size: s.size, quantity: parseInt(s.quantity, 10) || 0 }))
-            .filter(v => v.quantity > 0);
-
-          if (variants.length === 0) {
-            alert("Please enter a quantity for at least one size.");
-            return;
-          }
-
-          const totalQty = variants.reduce((sum, v) => sum + v.quantity, 0);
-
-          await logBatchWarehouseStockInAction({
-            category: stockInCategory.trim(),
-            color: stockInColor.trim(),
-            price,
-            variants,
-            locationId: 'wh-main',
-            staffId: 'Warehouse Staff',
-            notes: stockInNotes.trim() || `Batch intake for ${stockInCategory.trim()} (${totalQty} units total)`
-          });
-
-          alert(`Batch Stock-In Recorded: +${totalQty} units of ${stockInCategory.trim()} (${stockInColor.trim()}) across ${variants.length} sizes added to Main Warehouse.`);
-        }
-
-        // Reset Form to clean blank state
-        setStockInCategory('');
-        setStockInColor('');
-        setStockInPrice('');
-        setStockInSingleQty('');
-        setStockInNotes('');
-        setStockInMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
-
-        loadAllData();
-      } catch (err) {
-        alert(`Stock-in failed: ${(err as Error).message}`);
-      }
-    });
-  };
-
-  // Submit Stock Transfer
-  const handleTransferSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!transferSku.trim()) {
-      alert("Please select or enter the SKU to transfer.");
-      return;
-    }
-    const qty = parseInt(transferQty, 10) || 0;
-    if (qty <= 0) {
-      alert("Please enter a valid transfer quantity (> 0).");
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        await allocateStockTransferAction(
-          transferSku.trim(),
-          qty,
-          'wh-main',
-          transferDestLocation,
-          'Admin',
-          transferNotes.trim() || 'Tent allocation'
-        );
-        const destName = locations.find(l => l.id === transferDestLocation)?.name || transferDestLocation;
-        alert(`Stock Dispatched: ${qty} units of ${transferSku.trim()} allocated to ${destName}.`);
-
-        setTransferSku('');
-        setTransferQty('');
-        setTransferNotes('');
-
-        loadAllData();
-      } catch (err) {
-        alert(`Transfer failed: ${(err as Error).message}`);
-      }
-    });
-  };
-
-  // Save Catalog SKU
-  const handleSaveCatalogItem = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const sku = `${newCatalogCategory}|${newCatalogColor}|${newCatalogSize}`;
-    const item: CatalogItem = {
-      sku,
-      category: newCatalogCategory,
-      color: newCatalogColor === 'None' ? null : newCatalogColor,
-      size: newCatalogSize === 'None' ? null : newCatalogSize,
-      price: newCatalogPrice,
-      low_stock_threshold: newCatalogThreshold
-    };
-
-    startTransition(async () => {
-      try {
-        await upsertCatalogItemAction(item);
-        alert(`Catalog SKU Saved: ${sku} @ ${newCatalogPrice} KES.`);
-        loadAllData();
-      } catch (err) {
-        alert(`Failed to save catalog SKU.`);
-      }
-    });
   };
 
   // CSV Importer
@@ -737,16 +816,6 @@ export default function Dashboard() {
         alert(`Import failed: ${(err as Error).message}`);
       }
     });
-  };
-
-  const handleSavePrefixLabel = async (prefix: string) => {
-    try {
-      await updateOrderPrefixLabelAction(prefix, editingPrefixLabel);
-      setPrefixes(prev => prev.map(p => p.prefix === prefix ? { ...p, label: editingPrefixLabel } : p));
-      setEditingPrefix(null);
-    } catch (err) {
-      alert("Failed to update prefix label.");
-    }
   };
 
   const handleDbReset = async () => {
@@ -828,6 +897,12 @@ export default function Dashboard() {
           Log & dispatch
         </button>
         <button
+          onClick={() => setActiveTab('events')}
+          className={activeTab === 'events' ? 'active' : ''}
+        >
+          Events & transfers
+        </button>
+        <button
           onClick={() => setActiveTab('stock')}
           className={activeTab === 'stock' ? 'active' : ''}
         >
@@ -847,7 +922,7 @@ export default function Dashboard() {
         </button>
       </nav>
 
-      {/* Stats Connected Hero Box (From Event Spreadsheet) */}
+      {/* Stats Connected Hero Box */}
       <div className="stats">
         <div className="stat">
           <div className="label">TOTAL STOCK RECEIVED</div>
@@ -876,7 +951,7 @@ export default function Dashboard() {
       </div>
 
       {/* ========================================================================= */}
-      {/* TAB 0: DASHBOARD (GOOGLE SHEETS INTEGRATED INVENTORY & SALES MATRIX) */}
+      {/* TAB 0: DASHBOARD */}
       {/* ========================================================================= */}
       {activeTab === 'dashboard' && (
         <div>
@@ -979,7 +1054,7 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: LOG & DISPATCH (MAIN STATION) */}
+      {/* TAB 1: LOG & DISPATCH */}
       {/* ========================================================================= */}
       {activeTab === 'fulfillment' && (
         <div className="layout">
@@ -1082,7 +1157,7 @@ export default function Dashboard() {
                 />
               </div>
 
-              {/* Customer / Delivery Link */}
+              {/* Customer Details */}
               <div className="link-row">
                 <button
                   type="button"
@@ -1193,7 +1268,7 @@ export default function Dashboard() {
                                     onClick={() => {
                                       setSelectedCategory(cat);
                                       setSelectedColor(col);
-                                      setSelectedSize(item.size || 'None');
+                                      setSelectedSize(item.size || 'One Size');
                                     }}
                                     title="Click to select in form"
                                   >
@@ -1214,7 +1289,277 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: STOCK & CATALOG */}
+      {/* TAB 2: EVENTS & TRANSFERS (COMPLETE 2-STEP LIFECYCLE) */}
+      {/* ========================================================================= */}
+      {activeTab === 'events' && (
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
+            {/* Create Event Card */}
+            <div className="card">
+              <div className="card-head">Create new event station</div>
+              <form className="form" onSubmit={handleCreateEvent}>
+                <div className="field">
+                  <span className="field-label">Event Name</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Kabras 7s, Blankets & Wine"
+                    value={newEventName}
+                    onChange={(e) => setNewEventName(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
+                    required
+                  />
+                </div>
+                <div className="field">
+                  <span className="field-label">Venue / City</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Kakamega Sports Club"
+                    value={newEventVenue}
+                    onChange={(e) => setNewEventVenue(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
+                  />
+                </div>
+                <button type="submit" className="submit" disabled={isPending}>
+                  Create event station
+                </button>
+              </form>
+            </div>
+
+            {/* Outbound Stock Transfer to Event */}
+            <div className="card">
+              <div className="card-head">Dispatch stock to event tent</div>
+              <form className="form" onSubmit={handleDispatchStockToEvent}>
+                <div className="field">
+                  <span className="field-label">Destination Event</span>
+                  <select
+                    className="plain"
+                    value={eventDispatchEventId}
+                    onChange={(e) => setEventDispatchEventId(e.target.value)}
+                    required
+                  >
+                    <option value="">Select Event...</option>
+                    {locations.filter(l => l.type === 'event').map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Select SKU</span>
+                  <select
+                    className="plain"
+                    value={eventDispatchSku}
+                    onChange={(e) => setEventDispatchSku(e.target.value)}
+                    required
+                  >
+                    <option value="">Select warehouse stock...</option>
+                    {catalog.map(c => {
+                      const whItem = stockOnHand.find(s => s.location_id === 'wh-main' && s.sku === c.sku);
+                      const qty = whItem ? whItem.stock_on_hand : 0;
+                      return (
+                        <option key={c.sku} value={c.sku}>
+                          {c.sku} ({qty} pcs in WH)
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Dispatch Quantity</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 50"
+                    value={eventDispatchQty}
+                    onChange={(e) => setEventDispatchQty(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
+                    required
+                  />
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Notes</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Initial tent batch allocation"
+                    value={eventDispatchNotes}
+                    onChange={(e) => setEventDispatchNotes(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
+                  />
+                </div>
+
+                <button type="submit" className="submit" disabled={isPending}>
+                  Dispatch stock to tent
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* Active Events & 2-Step Handover Overview */}
+          <div className="card" style={{ marginBottom: '24px' }}>
+            <div className="card-head">
+              <span>Active events & 2-step stock return verification</span>
+            </div>
+            <div style={{ padding: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+                {locations.filter(l => l.type === 'event').map(loc => {
+                  const eventTrans = eventTransfers.filter(t => t.event_id === loc.id);
+                  const totalAllocated = eventTrans.reduce((sum, t) => sum + t.allocated_qty, 0);
+                  const eventStock = stockOnHand.filter(s => s.location_id === loc.id);
+                  const totalCurrentStock = eventStock.reduce((sum, s) => sum + s.stock_on_hand, 0);
+
+                  const isReturnCounted = eventTrans.some(t => t.status === 'return_counted_by_staff');
+                  const isVerified = eventTrans.length > 0 && eventTrans.every(t => t.status === 'verified_in_warehouse');
+
+                  return (
+                    <div
+                      key={loc.id}
+                      style={{
+                        border: '1px solid var(--line)',
+                        borderRadius: '10px',
+                        padding: '16px',
+                        background: 'var(--panel)'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: '15px' }}>{loc.name}</div>
+                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>
+                            Created: {new Date(loc.created_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            padding: '3px 8px',
+                            borderRadius: '5px',
+                            background: isVerified ? 'var(--success-bg)' : isReturnCounted ? 'var(--amber-bg)' : 'var(--bg)',
+                            color: isVerified ? 'var(--success)' : isReturnCounted ? 'var(--amber)' : 'var(--ink)'
+                          }}
+                        >
+                          {isVerified ? 'RECONCILED IN WH' : isReturnCounted ? 'IN TRANSIT TO WH' : 'ACTIVE ON GROUND'}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '12px 0', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '14px' }}>
+                        <div>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>OUTBOUND ALLOCATED</div>
+                          <div className="mono" style={{ fontSize: '16px', fontWeight: 600 }}>{totalAllocated || '—'} pcs</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>CURRENT TENT STOCK</div>
+                          <div className="mono" style={{ fontSize: '16px', fontWeight: 600, color: totalCurrentStock > 0 ? 'var(--ink)' : 'var(--muted)' }}>
+                            {totalCurrentStock} pcs
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        {/* Step 1: Tent Worker Closeout Count */}
+                        <button
+                          type="button"
+                          onClick={() => openTentCloseoutModal(loc.id)}
+                          style={{
+                            flex: 1,
+                            padding: '8px',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            border: '1px solid var(--line)',
+                            background: 'var(--bg)',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            color: 'var(--ink)'
+                          }}
+                        >
+                          1. Tent Closeout Count
+                        </button>
+
+                        {/* Step 2: Warehouse Verification & Intake */}
+                        <button
+                          type="button"
+                          onClick={() => openWhVerifyModal(loc.id)}
+                          style={{
+                            flex: 1,
+                            padding: '8px',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            border: 'none',
+                            background: isReturnCounted ? 'var(--ink)' : 'var(--line)',
+                            color: isReturnCounted ? '#FFFFFF' : 'var(--muted)',
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          2. WH Intake Verify
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Event Transfer Audit Ledger */}
+          <div className="card">
+            <div className="card-head">
+              <span>Event transfer manifests & verification records</span>
+            </div>
+            <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Event</th>
+                    <th>SKU</th>
+                    <th className="num-cell">Outbound Sent</th>
+                    <th className="num-cell">Tent Staff Count</th>
+                    <th className="num-cell">WH Confirmed</th>
+                    <th className="num-cell">Variance</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {eventTransfers.map(t => {
+                    const eventName = locations.find(l => l.id === t.event_id)?.name.split(' ')[0] || t.event_id;
+                    const hasVariance = (t.variance ?? 0) !== 0;
+
+                    return (
+                      <tr key={t.id}>
+                        <td style={{ fontWeight: 600 }}>{eventName}</td>
+                        <td className="mono">{t.sku}</td>
+                        <td className="num-cell">{t.allocated_qty}</td>
+                        <td className="num-cell">{t.tent_staff_return_count ?? '—'}</td>
+                        <td className="num-cell">{t.wh_verified_count ?? '—'}</td>
+                        <td className={`num-cell ${hasVariance ? 'tag-negative' : ''}`}>
+                          {t.variance !== null && t.variance !== undefined ? (t.variance > 0 ? `+${t.variance}` : t.variance) : '—'}
+                        </td>
+                        <td>
+                          <span
+                            className="mono"
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              color: t.status === 'verified_in_warehouse' ? 'var(--success)' : t.status === 'return_counted_by_staff' ? 'var(--amber)' : 'var(--muted)'
+                            }}
+                          >
+                            {t.status === 'verified_in_warehouse' ? 'Verified in WH' : t.status === 'return_counted_by_staff' ? 'In Transit' : 'Dispatched'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 3: STOCK & CATALOG */}
       {/* ========================================================================= */}
       {activeTab === 'stock' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: '24px' }}>
@@ -1261,7 +1606,6 @@ export default function Dashboard() {
             </div>
 
             <form className="form" onSubmit={handleStockInSubmit}>
-              {/* Category / Name */}
               <div className="field">
                 <span className="field-label">Item / Category</span>
                 <input
@@ -1286,7 +1630,6 @@ export default function Dashboard() {
                 </datalist>
               </div>
 
-              {/* Colourway */}
               <div className="field">
                 <span className="field-label">Colourway</span>
                 <input
@@ -1311,7 +1654,6 @@ export default function Dashboard() {
                 </datalist>
               </div>
 
-              {/* Retail Price */}
               <div className="field">
                 <span className="field-label">Retail Price (KES)</span>
                 <input
@@ -1324,7 +1666,6 @@ export default function Dashboard() {
                 />
               </div>
 
-              {/* Single Mode: Size & Qty */}
               {stockInMode === 'single' && (
                 <>
                   <div className="field">
@@ -1365,7 +1706,6 @@ export default function Dashboard() {
                 </>
               )}
 
-              {/* Multi Mode: Matrix Grid */}
               {stockInMode === 'multi' && (
                 <div className="field block-field">
                   <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>Quantities by Size</span>
@@ -1390,7 +1730,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Supplier Notes */}
               <div className="field">
                 <span className="field-label">Supplier / Batch Notes</span>
                 <input
@@ -1408,19 +1747,19 @@ export default function Dashboard() {
             </form>
           </div>
 
-          {/* Dynamic Stock Transfer */}
+          {/* Quick Transfer Card */}
           <div className="card">
-            <div className="card-head">Stock transfer to tent</div>
-            <form className="form" onSubmit={handleTransferSubmit}>
+            <div className="card-head">Quick transfer to event tent</div>
+            <form className="form" onSubmit={handleDispatchStockToEvent}>
               <div className="field">
                 <span className="field-label">Select SKU</span>
                 <select
                   className="plain"
-                  value={transferSku}
-                  onChange={(e) => setTransferSku(e.target.value)}
+                  value={eventDispatchSku}
+                  onChange={(e) => setEventDispatchSku(e.target.value)}
                   required
                 >
-                  <option value="">Choose item to transfer...</option>
+                  <option value="">Choose warehouse stock...</option>
                   {catalog.map(c => (
                     <option key={c.sku} value={c.sku}>
                       {c.sku} ({c.price} KES)
@@ -1433,10 +1772,11 @@ export default function Dashboard() {
                 <span className="field-label">Destination</span>
                 <select
                   className="plain"
-                  value={transferDestLocation}
-                  onChange={(e) => setTransferDestLocation(e.target.value)}
+                  value={eventDispatchEventId}
+                  onChange={(e) => setEventDispatchEventId(e.target.value)}
                   required
                 >
+                  <option value="">Select Event...</option>
                   {locations.filter(l => l.type === 'event').map(l => (
                     <option key={l.id} value={l.id}>{l.name}</option>
                   ))}
@@ -1449,8 +1789,8 @@ export default function Dashboard() {
                   type="number"
                   min="1"
                   placeholder="e.g. 20"
-                  value={transferQty}
-                  onChange={(e) => setTransferQty(e.target.value)}
+                  value={eventDispatchQty}
+                  onChange={(e) => setEventDispatchQty(e.target.value)}
                   style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
                   required
                 />
@@ -1461,8 +1801,8 @@ export default function Dashboard() {
                 <input
                   type="text"
                   placeholder="e.g. Tent allocation batch"
-                  value={transferNotes}
-                  onChange={(e) => setTransferNotes(e.target.value)}
+                  value={eventDispatchNotes}
+                  onChange={(e) => setEventDispatchNotes(e.target.value)}
                   style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
                 />
               </div>
@@ -1508,7 +1848,7 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 3: CSV IMPORT */}
+      {/* TAB 4: CSV IMPORT */}
       {/* ========================================================================= */}
       {activeTab === 'importer' && (
         <div className="card">
@@ -1573,7 +1913,7 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 4: RECONCILIATION */}
+      {/* TAB 5: RECONCILIATION */}
       {/* ========================================================================= */}
       {activeTab === 'reports' && (
         <div>
@@ -1648,6 +1988,185 @@ export default function Dashboard() {
                 Reset database
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 1: TENT STAFF CLOSEOUT COUNT MODAL */}
+      {/* ========================================================================= */}
+      {tentModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{ maxWidth: '540px' }}>
+            <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
+              <span>Step 1: Tent Stock Closeout Handover Count</span>
+              <button
+                onClick={() => setTentModalOpen(false)}
+                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px' }}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
+              Count all unsold merchandise remaining in the event tent before boxing and transport to the warehouse.
+            </p>
+
+            <form onSubmit={handleTentCloseoutSubmit}>
+              <div className="field">
+                <span className="field-label">Tent Staff Name</span>
+                <input
+                  type="text"
+                  placeholder="e.g. Kelvin (Tent Manager)"
+                  value={tentCountStaffName}
+                  onChange={(e) => setTentCountStaffName(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                  required
+                />
+              </div>
+
+              <div style={{ maxHeight: '250px', overflowY: 'auto', margin: '14px 0', border: '1px solid var(--line)', borderRadius: '8px' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>SKU Variant</th>
+                      <th className="num-cell">Expected Tent Stock</th>
+                      <th className="num-cell">Staff Physical Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tentCountRows.map((r, idx) => (
+                      <tr key={r.sku}>
+                        <td className="mono" style={{ fontWeight: 600 }}>{r.sku}</td>
+                        <td className="num-cell">{r.expectedQty} pcs</td>
+                        <td className="num-cell">
+                          <input
+                            type="number"
+                            min="0"
+                            value={r.staffCount}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setTentCountRows(prev => prev.map((item, i) => i === idx ? { ...item, staffCount: val } : item));
+                            }}
+                            style={{ width: '60px', border: '1px solid var(--line)', borderRadius: '5px', padding: '4px', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
+                            required
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="field">
+                <span className="field-label">Handover Notes</span>
+                <input
+                  type="text"
+                  placeholder="e.g. Boxed into 3 sealed crates"
+                  value={tentCountNotes}
+                  onChange={(e) => setTentCountNotes(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
+                />
+              </div>
+
+              <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
+                Submit tent count (Handover in transit)
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 2: WAREHOUSE INTAKE VERIFICATION & CONFIRMATION */}
+      {/* ========================================================================= */}
+      {whVerifyModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{ maxWidth: '600px' }}>
+            <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
+              <span>Step 2: Warehouse Intake Verification</span>
+              <button
+                onClick={() => setWhVerifyModalOpen(false)}
+                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px' }}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
+              Verify physical boxes returned from the event. Confirmed stock will be automatically transferred back into the Main Warehouse ledger.
+            </p>
+
+            <form onSubmit={handleWhVerifySubmit}>
+              <div className="field">
+                <span className="field-label">Warehouse Rep Name</span>
+                <input
+                  type="text"
+                  placeholder="e.g. Sarah (Warehouse Lead)"
+                  value={whVerifyStaffName}
+                  onChange={(e) => setWhVerifyStaffName(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                  required
+                />
+              </div>
+
+              <div style={{ maxHeight: '250px', overflowY: 'auto', margin: '14px 0', border: '1px solid var(--line)', borderRadius: '8px' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>SKU</th>
+                      <th className="num-cell">Tent Count</th>
+                      <th className="num-cell">WH Intake Count</th>
+                      <th className="num-cell">Variance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {whVerifyRows.map((r, idx) => {
+                      const whNum = parseInt(r.whCount, 10) || 0;
+                      const diff = whNum - r.staffCount;
+
+                      return (
+                        <tr key={r.sku}>
+                          <td className="mono" style={{ fontWeight: 600 }}>{r.sku}</td>
+                          <td className="num-cell">{r.staffCount} pcs</td>
+                          <td className="num-cell">
+                            <input
+                              type="number"
+                              min="0"
+                              value={r.whCount}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setWhVerifyRows(prev => prev.map((item, i) => i === idx ? { ...item, whCount: val } : item));
+                              }}
+                              style={{ width: '60px', border: '1px solid var(--line)', borderRadius: '5px', padding: '4px', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
+                              required
+                            />
+                          </td>
+                          <td className={`num-cell ${diff !== 0 ? 'tag-negative' : 'tag-green'}`}>
+                            {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '0 (OK)'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="field">
+                <span className="field-label">Intake Confirmation Notes</span>
+                <input
+                  type="text"
+                  placeholder="e.g. All 3 boxes verified & shelved"
+                  value={whVerifyNotes}
+                  onChange={(e) => setWhVerifyNotes(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
+                />
+              </div>
+
+              <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
+                Confirm & add stock to main warehouse
+              </button>
+            </form>
           </div>
         </div>
       )}

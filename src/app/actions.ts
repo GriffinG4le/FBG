@@ -3,6 +3,7 @@
 
 import {
   getLocations,
+  createEventLocation,
   getCatalog,
   upsertCatalogItem,
   deleteCatalogItem,
@@ -16,6 +17,10 @@ import {
   logDynamicWarehouseStockIn,
   logBatchWarehouseStockIn,
   allocateStockTransfer,
+  getEventTransfers,
+  dispatchBatchToEvent,
+  submitTentStaffReturnCount,
+  verifyWarehouseReturnIntake,
   fulfillOrder,
   quickWalkUpFulfill,
   importTikoHubOrders,
@@ -26,7 +31,8 @@ import {
   Fulfillment,
   LedgerRow,
   StockOnHandItem,
-  OrderPrefix
+  OrderPrefix,
+  EventStockTransfer
 } from '../lib/db';
 import { RawParsedOrder } from '../lib/csvParser';
 
@@ -171,6 +177,66 @@ export async function logBatchWarehouseStockInAction(params: {
   }
 }
 
+
+export async function createEventLocationAction(name: string, venue?: string): Promise<Location> {
+  try {
+    return await createEventLocation(name, venue);
+  } catch (error) {
+    console.error("Failed to create event location:", error);
+    throw new Error("Failed to create event.");
+  }
+}
+
+export async function getEventTransfersAction(eventId?: string): Promise<EventStockTransfer[]> {
+  try {
+    return await getEventTransfers(eventId);
+  } catch (error) {
+    console.error("Failed to get event transfers:", error);
+    throw new Error("Failed to load event transfers.");
+  }
+}
+
+export async function dispatchBatchToEventAction(
+  eventId: string,
+  items: { sku: string; quantity: number }[],
+  staffId?: string,
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  try {
+    return await dispatchBatchToEvent(eventId, items, staffId, notes);
+  } catch (error) {
+    console.error("Failed to dispatch batch to event:", error);
+    throw new Error("Failed to allocate and dispatch stock to event.");
+  }
+}
+
+export async function submitTentStaffReturnCountAction(
+  eventId: string,
+  counts: { sku: string; staffCount: number }[],
+  staffId?: string,
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  try {
+    return await submitTentStaffReturnCount(eventId, counts, staffId, notes);
+  } catch (error) {
+    console.error("Failed to submit tent return count:", error);
+    throw new Error("Failed to record tent return count.");
+  }
+}
+
+export async function verifyWarehouseReturnIntakeAction(
+  eventId: string,
+  verifiedCounts: { sku: string; whCount: number }[],
+  whStaffId?: string,
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  try {
+    return await verifyWarehouseReturnIntake(eventId, verifiedCounts, whStaffId, notes);
+  } catch (error) {
+    console.error("Failed to verify warehouse return intake:", error);
+    throw new Error("Failed to verify warehouse return intake.");
+  }
+}
 
 export async function allocateStockTransferAction(
   sku: string,

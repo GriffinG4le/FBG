@@ -92,6 +92,23 @@ export interface StaffProfile {
   assigned_location_ids: string[];
 }
 
+export interface EventStockTransfer {
+  id: string;
+  event_id: string;
+  sku: string;
+  allocated_qty: number;
+  tent_staff_return_count?: number | null;
+  tent_staff_id?: string | null;
+  tent_staff_submitted_at?: string | null;
+  wh_verified_count?: number | null;
+  wh_staff_id?: string | null;
+  wh_verified_at?: string | null;
+  variance?: number | null;
+  status: 'dispatched_to_event' | 'return_counted_by_staff' | 'verified_in_warehouse';
+  notes?: string | null;
+  created_at: string;
+}
+
 // Initial Standard Mock State for Fallback / Seeding
 const INITIAL_LOCATIONS: Location[] = [
   { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() },
@@ -189,6 +206,24 @@ const INITIAL_ORDERS: Order[] = [
   { id: 'ord-f02', source_prefix: 'SH', order_ref: '5H9K2', original_sku: 'Fan Jersey|Red|M', amount_paid: 2500, customer_name: 'Mary Achieng', channel: 'Card', status: 'fulfilled', created_at: new Date(Date.now() - 86400000).toISOString() }
 ];
 
+const INITIAL_EVENT_TRANSFERS: EventStockTransfer[] = [
+  { id: 'et-sp-01', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|XS', allocated_qty: 20, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-02', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|XS', allocated_qty: 20, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-03', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|S', allocated_qty: 31, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-04', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|S', allocated_qty: 10, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-05', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|M', allocated_qty: 62, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-06', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|M', allocated_qty: 54, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-07', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|L', allocated_qty: 197, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-08', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|L', allocated_qty: 121, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-09', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|XL', allocated_qty: 246, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-10', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|XL', allocated_qty: 53, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-11', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|2XL', allocated_qty: 47, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-12', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|2XL', allocated_qty: 43, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-13', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|3XL', allocated_qty: 33, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-14', event_id: 'evt-sp7s', sku: 'Fan Jersey|Red|3XL', allocated_qty: 27, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+  { id: 'et-sp-15', event_id: 'evt-sp7s', sku: 'Fan Jersey|White|4XL', allocated_qty: 10, status: 'dispatched_to_event', created_at: new Date(Date.now() - 86400000 * 2).toISOString() }
+];
+
 // In-memory persistent fallback state when running locally / disconnected
 let memoryLocations = [...INITIAL_LOCATIONS];
 let memoryPrefixes = [...INITIAL_PREFIXES];
@@ -199,6 +234,7 @@ let memoryFulfillments: Fulfillment[] = [
   { id: 'ful-f02', order_id: 'ord-f02', source_prefix: 'SH', order_ref: '5H9K2', original_sku: 'Fan Jersey|Red|M', actual_sku: 'Fan Jersey|Red|M', price_delta: 0, cash_collected: 0, location_id: 'evt-sp7s', staff_id: 'Staff', fulfilled_at: new Date(Date.now() - 86400000).toISOString() }
 ];
 let memoryLedger = [...INITIAL_LEDGER];
+let memoryEventTransfers = [...INITIAL_EVENT_TRANSFERS];
 
 // Helper to ensure SKU exists in catalog
 async function ensureSkuExists(sku: string, price: number = 0) {
@@ -273,6 +309,33 @@ export async function getLocations(): Promise<Location[]> {
     console.warn("Supabase fetch failed for locations, using memory cache:", e);
   }
   return memoryLocations;
+}
+
+export async function createEventLocation(name: string, venue?: string): Promise<Location> {
+  const cleanName = name.trim();
+  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const id = `evt-${slug || Date.now().toString()}`;
+
+  const newLoc: Location = {
+    id,
+    name: venue ? `${cleanName} (${venue.trim()})` : cleanName,
+    type: 'event',
+    status: 'active',
+    created_at: new Date().toISOString()
+  };
+
+  try {
+    const { data, error } = await supabase.from('locations').insert(newLoc).select().single();
+    if (!error && data) {
+      memoryLocations.push(data);
+      return data;
+    }
+  } catch (e) {
+    console.warn("Supabase location insert failed, writing to memory store:", e);
+  }
+
+  memoryLocations.push(newLoc);
+  return newLoc;
 }
 
 // ==============================================================================
@@ -610,6 +673,159 @@ export async function allocateStockTransfer(
   memoryLedger.unshift(sRow, dRow);
   return { sourceRow: sRow, destRow: dRow };
 }
+
+// ==============================================================================
+// Event Stock Transfers & 2-Step Closeout Handover API
+// ==============================================================================
+
+export async function getEventTransfers(eventId?: string): Promise<EventStockTransfer[]> {
+  let list = memoryEventTransfers;
+  if (eventId) {
+    list = list.filter(t => t.event_id === eventId);
+  }
+  return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+export async function dispatchBatchToEvent(
+  eventId: string,
+  items: { sku: string; quantity: number }[],
+  staffId: string = 'Admin',
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  const results: EventStockTransfer[] = [];
+
+  for (const item of items) {
+    if (item.quantity > 0) {
+      // 1. Allocate stock movement on ledger (WH -> Event)
+      await allocateStockTransfer(
+        item.sku,
+        item.quantity,
+        'wh-main',
+        eventId,
+        staffId,
+        notes || `Event outbound dispatch`
+      );
+
+      // 2. Track transfer manifest record
+      const transferRecord: EventStockTransfer = {
+        id: `et-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        event_id: eventId,
+        sku: item.sku,
+        allocated_qty: item.quantity,
+        tent_staff_return_count: null,
+        wh_verified_count: null,
+        status: 'dispatched_to_event',
+        notes: notes || null,
+        created_at: new Date().toISOString()
+      };
+
+      memoryEventTransfers.unshift(transferRecord);
+      results.push(transferRecord);
+    }
+  }
+
+  return results;
+}
+
+export async function submitTentStaffReturnCount(
+  eventId: string,
+  counts: { sku: string; staffCount: number }[],
+  staffId: string = 'Tent Staff',
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  const timestamp = new Date().toISOString();
+  const updated: EventStockTransfer[] = [];
+
+  for (const c of counts) {
+    const existing = memoryEventTransfers.find(t => t.event_id === eventId && t.sku === c.sku);
+    if (existing) {
+      existing.tent_staff_return_count = c.staffCount;
+      existing.tent_staff_id = staffId;
+      existing.tent_staff_submitted_at = timestamp;
+      existing.status = 'return_counted_by_staff';
+      if (notes) existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `Staff Return: ${notes}`;
+      updated.push(existing);
+    } else {
+      const newRecord: EventStockTransfer = {
+        id: `et-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        event_id: eventId,
+        sku: c.sku,
+        allocated_qty: 0,
+        tent_staff_return_count: c.staffCount,
+        tent_staff_id: staffId,
+        tent_staff_submitted_at: timestamp,
+        status: 'return_counted_by_staff',
+        notes: notes || 'Tent return count',
+        created_at: timestamp
+      };
+      memoryEventTransfers.unshift(newRecord);
+      updated.push(newRecord);
+    }
+  }
+
+  return updated;
+}
+
+export async function verifyWarehouseReturnIntake(
+  eventId: string,
+  verifiedCounts: { sku: string; whCount: number }[],
+  whStaffId: string = 'Warehouse Rep',
+  notes?: string
+): Promise<EventStockTransfer[]> {
+  const timestamp = new Date().toISOString();
+  const updated: EventStockTransfer[] = [];
+
+  for (const v of verifiedCounts) {
+    const count = Math.max(0, v.whCount);
+    const existing = memoryEventTransfers.find(t => t.event_id === eventId && t.sku === v.sku);
+    const staffCount = existing?.tent_staff_return_count ?? count;
+    const variance = count - staffCount;
+
+    if (existing) {
+      existing.wh_verified_count = count;
+      existing.wh_staff_id = whStaffId;
+      existing.wh_verified_at = timestamp;
+      existing.variance = variance;
+      existing.status = 'verified_in_warehouse';
+      if (notes) existing.notes = (existing.notes ? existing.notes + ' | ' : '') + `WH Verified: ${notes}`;
+      updated.push(existing);
+    }
+
+    // 1. Transfer verified stock back to Main Warehouse: Event -> wh-main
+    if (count > 0) {
+      await allocateStockTransfer(
+        v.sku,
+        count,
+        eventId,
+        'wh-main',
+        whStaffId,
+        notes || `Event return intake to warehouse (${v.sku})`
+      );
+    }
+
+    // 2. If variance / shrinkage detected, post ledger Correction to balance event ledger
+    if (variance !== 0) {
+      const correctionRow: Omit<LedgerRow, 'id' | 'timestamp'> = {
+        type: 'Correction',
+        sku: v.sku,
+        quantity_delta: variance,
+        location_id: eventId,
+        staff_id: whStaffId,
+        amount: 0,
+        notes: `Variance between tent count (${staffCount}) and warehouse intake (${count}): ${variance > 0 ? '+' : ''}${variance}`
+      };
+      const cRow: LedgerRow = {
+        ...correctionRow,
+        id: `led-cor-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        timestamp
+      };
+      memoryLedger.unshift(cRow);
+    }
+  }
+
+  return updated;
+}
+
 
 export async function fulfillOrder(params: {
   orderId: string;
