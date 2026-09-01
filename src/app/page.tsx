@@ -7,7 +7,6 @@ import {
   updateOrderPrefixLabelAction,
   getCatalogAction,
   upsertCatalogItemAction,
-  deleteCatalogItemAction,
   getDerivedStockOnHandAction,
   getOrdersAction,
   getFulfillmentsAction,
@@ -26,8 +25,7 @@ import {
   Order,
   Fulfillment,
   LedgerRow,
-  StockOnHandItem,
-  StaffProfile
+  StockOnHandItem
 } from '../lib/db';
 import { parseTikoHubCSV, ParseResult } from '../lib/csvParser';
 import {
@@ -37,17 +35,9 @@ import {
   clearOfflineQueue
 } from '../lib/offlineQueue';
 
-const STAFF_PROFILES: StaffProfile[] = [
-  { id: 'staff-winston', name: 'Winston (Admin)', role: 'admin', assigned_location_ids: ['*'] },
-  { id: 'staff-sarah', name: 'Sarah (Warehouse)', role: 'warehouse', assigned_location_ids: ['wh-main'] },
-  { id: 'staff-mwai', name: 'Mwai (SportPesa 7s)', role: 'event_staff', assigned_location_ids: ['evt-sp7s'] },
-  { id: 'staff-george', name: 'George (Driftwood 7s)', role: 'event_staff', assigned_location_ids: ['evt-driftwood'] }
-];
-
 export default function Dashboard() {
-  // Navigation & Tenant Scoping
+  // Navigation & Location Scoping
   const [activeTab, setActiveTab] = useState<'fulfillment' | 'stock' | 'importer' | 'reports'>('fulfillment');
-  const [currentStaff, setCurrentStaff] = useState<StaffProfile>(STAFF_PROFILES[0]);
   const [selectedLocationId, setSelectedLocationId] = useState<string>('evt-sp7s');
 
   // Core Data
@@ -63,9 +53,8 @@ export default function Dashboard() {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [queueSize, setQueueSize] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [syncStatusText, setSyncStatusText] = useState<string>('');
 
-  // Primary Order Logging Form State
+  // Order Logging Form State
   const [logPrefix, setLogPrefix] = useState<string>('ORD');
   const [logOrderRef, setLogOrderRef] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Fan Jersey');
@@ -80,7 +69,7 @@ export default function Dashboard() {
   const [logNotes, setLogNotes] = useState<string>('');
   const [showOptionalDetails, setShowOptionalDetails] = useState<boolean>(false);
 
-  // Search & Filters for Right Panel
+  // Search & Filter
   const [recentSearchQuery, setRecentSearchQuery] = useState<string>('');
 
   // Admin Catalog Manager Form
@@ -179,15 +168,6 @@ export default function Dashboard() {
     }
   };
 
-  // Staff Profile Selector
-  const handleStaffChange = (staffId: string) => {
-    const staff = STAFF_PROFILES.find(s => s.id === staffId) || STAFF_PROFILES[0];
-    setCurrentStaff(staff);
-    if (!staff.assigned_location_ids.includes('*')) {
-      setSelectedLocationId(staff.assigned_location_ids[0]);
-    }
-  };
-
   // Auto Sync
   const autoSync = async () => {
     if (getOfflineQueue().length > 0) {
@@ -198,23 +178,11 @@ export default function Dashboard() {
   const handleManualSync = async () => {
     if (isSyncing) return;
     setIsSyncing(true);
-    setSyncStatusText('Syncing offline transactions...');
 
     try {
-      const res = await syncOfflineQueue((index, total) => {
-        setSyncStatusText(`Syncing transaction ${index} of ${total}...`);
-      });
-
-      if (res.success) {
-        setSyncStatusText('All offline transactions synced.');
-        setTimeout(() => setSyncStatusText(''), 3000);
-      } else {
-        setSyncStatusText(`Sync complete with ${res.errors.length} errors.`);
-        alert(`Sync Errors:\n${res.errors.join('\n')}`);
-      }
+      await syncOfflineQueue();
     } catch (err) {
       console.error(err);
-      setSyncStatusText('Sync failed.');
     } finally {
       setIsSyncing(false);
       updateQueueCount();
@@ -260,7 +228,7 @@ export default function Dashboard() {
     });
   }, [catalog, selectedCategory, selectedColor]);
 
-  // Auto-lookup Price for Current Category | Color | Size
+  // Auto-lookup Price for Current Selection
   const currentSelectedSku = useMemo(() => {
     return `${selectedCategory}|${selectedColor}|${selectedSize}`;
   }, [selectedCategory, selectedColor, selectedSize]);
@@ -274,12 +242,10 @@ export default function Dashboard() {
     return item ? item.price : 2500;
   }, [catalog, selectedCategory, selectedColor, selectedSize]);
 
-  // When Category or Color or Size changes, update auto-populated amount
   useEffect(() => {
     setLogAmountPaid(currentSkuPrice.toString());
   }, [currentSkuPrice]);
 
-  // When Category changes, auto-select first available color
   const handleCategoryChange = (cat: string) => {
     setSelectedCategory(cat);
     const colors = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
@@ -296,13 +262,12 @@ export default function Dashboard() {
     if (sizes.length > 0) setSelectedSize(sizes[0]);
   };
 
-  // Get live stock remaining at current selected location for a SKU
   const getStockRemainingAtLocation = (sku: string) => {
     const item = stockOnHand.find(s => s.location_id === selectedLocationId && s.sku === sku);
     return item ? item.stock_on_hand : 0;
   };
 
-  // Orders Map & Join with Fulfillments
+  // Orders & Fulfillments Joined List
   const enrichedOrders = useMemo(() => {
     return orders.map(ord => {
       const ful = fulfillments.find(f => f.order_id === ord.id);
@@ -345,7 +310,7 @@ export default function Dashboard() {
     return null;
   }, [logOrderRef, orders]);
 
-  // Event KPIs (Derived dynamically)
+  // Event KPIs
   const eventMetrics = useMemo(() => {
     const totalOrdersCount = orders.length;
     const fulfilledCount = fulfillments.filter(f => selectedLocationId === 'wh-main' ? true : f.location_id === selectedLocationId).length;
@@ -367,7 +332,7 @@ export default function Dashboard() {
     };
   }, [orders, fulfillments, stockOnHand, selectedLocationId]);
 
-  // MAIN WORKHORSE: Log Order / Sale & Dispatch Jersey
+  // Dispatch Action
   const handleLogAndDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!logOrderRef.trim()) {
@@ -389,7 +354,7 @@ export default function Dashboard() {
       cashCollected: cashCollected,
       overrideReason: null,
       locationId: selectedLocationId,
-      staffId: currentStaff.name,
+      staffId: 'Staff',
       customerName: logCustomerName.trim() || null,
       customerPhone: logCustomerPhone.trim() || null,
       channel: logChannel,
@@ -420,7 +385,7 @@ export default function Dashboard() {
       cash_collected: payload.cashCollected,
       override_reason: null,
       location_id: selectedLocationId,
-      staff_id: currentStaff.name,
+      staff_id: 'Staff',
       notes: payload.notes,
       fulfilled_at: new Date().toISOString()
     };
@@ -446,7 +411,6 @@ export default function Dashboard() {
         await quickWalkUpFulfillAction(payload);
         loadAllData();
       } catch (err) {
-        console.warn("Online dispatch failed, queuing offline:", err);
         enqueueOfflineAction('walkup', payload);
         updateQueueCount();
       }
@@ -467,7 +431,6 @@ export default function Dashboard() {
     setSwapModalOpen(true);
   };
 
-  // Computed Auto Cash Delta for Swap
   const computedSwapDelta = useMemo(() => {
     if (!swapOrder || !selectedSwapSku) return 0;
     const origPrice = catalog.find(c => c.sku === swapOrder.original_sku)?.price || 0;
@@ -496,7 +459,7 @@ export default function Dashboard() {
       cashCollected: finalCashCollected,
       overrideReason: swapCashOverride.trim() !== '' ? (swapOverrideReason || 'Manual Price Override') : null,
       locationId: selectedLocationId,
-      staffId: currentStaff.name,
+      staffId: 'Staff',
       notes: `Swapped to ${selectedSwapSku}. ${swapNotes}`
     };
 
@@ -511,7 +474,7 @@ export default function Dashboard() {
       cash_collected: finalCashCollected,
       override_reason: payload.overrideReason,
       location_id: selectedLocationId,
-      staff_id: currentStaff.name,
+      staff_id: 'Staff',
       notes: payload.notes,
       fulfilled_at: new Date().toISOString()
     };
@@ -534,7 +497,6 @@ export default function Dashboard() {
         await fulfillOrderAction(payload);
         loadAllData();
       } catch (err) {
-        console.warn("Online swap failed, queuing offline:", err);
         enqueueOfflineAction('fulfill', payload);
         updateQueueCount();
       }
@@ -551,7 +513,7 @@ export default function Dashboard() {
 
     startTransition(async () => {
       try {
-        await logWarehouseStockInAction(stockInSku, stockInQty, 'wh-main', currentStaff.name, stockInNotes);
+        await logWarehouseStockInAction(stockInSku, stockInQty, 'wh-main', 'Warehouse', stockInNotes);
         alert(`Stock-In Recorded: +${stockInQty} units of ${stockInSku} added to Main Warehouse.`);
         loadAllData();
       } catch (err) {
@@ -572,11 +534,11 @@ export default function Dashboard() {
           transferQty,
           'wh-main',
           transferDestLocation,
-          currentStaff.name,
+          'Admin',
           transferNotes
         );
         const destName = locations.find(l => l.id === transferDestLocation)?.name || transferDestLocation;
-        alert(`Stock Dispatched: ${transferQty} units of ${transferSku} allocated from Warehouse to ${destName}.`);
+        alert(`Stock Dispatched: ${transferQty} units of ${transferSku} allocated to ${destName}.`);
         loadAllData();
       } catch (err) {
         alert(`Transfer failed: ${(err as Error).message}`);
@@ -608,7 +570,7 @@ export default function Dashboard() {
     });
   };
 
-  // CSV Importer: File load
+  // CSV Importer
   const handleCSVFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -628,12 +590,8 @@ export default function Dashboard() {
 
     startTransition(async () => {
       try {
-        const res = await importTikoHubOrdersAction(parseResult.orders, currentStaff.name);
-        const prefixMsg = res.prefixesCreated.length > 0 
-          ? `\nRegistered ${res.prefixesCreated.length} new source prefix(es): ${res.prefixesCreated.join(', ')}`
-          : '';
-
-        alert(`Import Complete!\n\nSuccessfully created: ${res.inserted} orders.\nIgnored duplicates: ${res.duplicates} rows.${prefixMsg}`);
+        const res = await importTikoHubOrdersAction(parseResult.orders, 'Admin');
+        alert(`Import Complete. Successfully created: ${res.inserted} orders. Ignored duplicates: ${res.duplicates} rows.`);
         setCsvFileName('');
         setParseResult(null);
         loadAllData();
@@ -644,7 +602,6 @@ export default function Dashboard() {
     });
   };
 
-  // Save Prefix Label Edit
   const handleSavePrefixLabel = async (prefix: string) => {
     try {
       await updateOrderPrefixLabelAction(prefix, editingPrefixLabel);
@@ -655,7 +612,6 @@ export default function Dashboard() {
     }
   };
 
-  // Database Reset
   const handleDbReset = async () => {
     if (confirm("WARNING: This will reset all orders, fulfillments, prefixes, and stock ledger to clean standard seeds. Proceed?")) {
       try {
@@ -670,7 +626,6 @@ export default function Dashboard() {
     }
   };
 
-  // Reconciliation Breakdown
   const reportCategoryBreakdown = useMemo(() => {
     const catMap = new Map<string, { ordered: number; dispatched: number; swaps: number; cashDelta: number }>();
 
@@ -705,54 +660,27 @@ export default function Dashboard() {
 
   return (
     <main className="app-wrapper">
-      {/* iOS Header */}
-      <header className="ios-header">
-        <div className="branding">
-          <div className="pre-title">Fulfilled By Griphine</div>
-          <h1>
-            {activeTab === 'fulfillment' && 'Log Sale & Dispatch Station'}
-            {activeTab === 'stock' && 'Master Stock & Allocation'}
-            {activeTab === 'importer' && 'CSV Orders Importer'}
-            {activeTab === 'reports' && 'Reconciliation & Audit Matrix'}
-          </h1>
+      {/* Minimalist Clean Header */}
+      <header className="app-header">
+        <div className="brand-logo">
+          Fulfilled by <span>Griphine</span>
         </div>
 
-        <div className="header-controls">
-          <div className={`status-pill ${isOnline ? 'online' : 'offline'}`}>
-            <span className="status-dot"></span>
-            {isOnline ? 'Online' : 'Offline'}
-          </div>
-
-          <select
-            className={`tenant-selector ${activeLocation.type === 'event' ? 'event-scoped' : ''}`}
-            value={selectedLocationId}
-            onChange={(e) => setSelectedLocationId(e.target.value)}
-            disabled={!currentStaff.assigned_location_ids.includes('*') && currentStaff.assigned_location_ids.length === 1}
-            title="Active Location"
-          >
-            {locations.map(loc => (
-              <option key={loc.id} value={loc.id}>
-                {loc.name}
-              </option>
-            ))}
-          </select>
-
-          <select
-            className="staff-selector"
-            value={currentStaff.id}
-            onChange={(e) => handleStaffChange(e.target.value)}
-            title="Staff Profile"
-          >
-            {STAFF_PROFILES.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        <select
+          className="location-picker"
+          value={selectedLocationId}
+          onChange={(e) => setSelectedLocationId(e.target.value)}
+          title="Active Location"
+        >
+          {locations.map(loc => (
+            <option key={loc.id} value={loc.id}>
+              {loc.name}
+            </option>
+          ))}
+        </select>
       </header>
 
-      {/* iOS Segmented Navigation Tabs */}
+      {/* Segmented Tabs */}
       <nav className="tabs-nav">
         <button
           onClick={() => setActiveTab('fulfillment')}
@@ -780,33 +708,16 @@ export default function Dashboard() {
         </button>
       </nav>
 
-      {/* Offline Alert Banner */}
-      {queueSize > 0 && (
-        <div className="alert-banner">
-          <div>
-            <strong>{queueSize} offline transaction{queueSize > 1 ? 's' : ''} queued</strong>
-            <div style={{ fontSize: '11px', color: 'var(--label-secondary)', marginTop: '2px' }}>
-              {syncStatusText || 'Saved locally in tent queue. Ready to sync.'}
-            </div>
-          </div>
-          {isOnline && (
-            <button onClick={handleManualSync} className="btn green small" disabled={isSyncing}>
-              {isSyncing ? 'Syncing...' : 'Sync Now'}
-            </button>
-          )}
-        </div>
-      )}
-
       {/* ========================================================================= */}
-      {/* TAB 1: LOG SALE & DISPATCH STATION */}
+      {/* TAB 1: LOG & DISPATCH STATION */}
       {/* ========================================================================= */}
       {activeTab === 'fulfillment' && (
         <div className="main-grid">
           {/* LEFT COLUMN: ORDER LOGGING & FULFILLMENT CARD */}
           <div>
-            <div className="card" style={{ padding: '20px' }}>
-              <div className="card-title" style={{ fontSize: '17px', marginBottom: '16px' }}>
-                <span>Log Order & Dispatch Jersey</span>
+            <div className="card">
+              <div className="card-title">
+                <span>Log Order & Dispatch</span>
                 <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent)' }}>
                   {activeLocation.name.split(' ')[0]}
                 </span>
@@ -814,16 +725,16 @@ export default function Dashboard() {
 
               {/* Collision Alert if typed ref has duplicates */}
               {typedCollision && (
-                <div className="collision-box" style={{ margin: '0 0 16px 0' }}>
-                  <div className="collision-title">
-                    <span>Collision: #{logOrderRef}</span>
+                <div className="collision-box" style={{ margin: '0 0 16px 0', background: 'var(--bg-subtle)', borderLeft: '3px solid var(--accent)', padding: '10px 14px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '2px' }}>
+                    Collision: #{logOrderRef}
                   </div>
-                  <div className="collision-subtitle">
-                    Found {typedCollision.length} existing orders with this ID across channels:
+                  <div style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '8px' }}>
+                    Found {typedCollision.length} orders with this ID across channels:
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     {typedCollision.map(c => (
-                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-screen)', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}>
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFFFFF', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}>
                         <span>
                           <strong className={`prefix-tag ${getPrefixClass(c.source_prefix)}`}>{c.source_prefix}</strong> #{c.order_ref} &middot; {c.customer_name || 'Walk-up'}
                         </span>
@@ -835,7 +746,7 @@ export default function Dashboard() {
               )}
 
               <form onSubmit={handleLogAndDispatch}>
-                <div className="form-group" style={{ margin: '0 0 14px 0' }}>
+                <div className="form-group" style={{ margin: '0 0 14px 0', boxShadow: 'none', border: '0.5px solid var(--divider-light)' }}>
                   {/* Field 1: Order ID Input */}
                   <div className="form-row">
                     <span className="row-label">Order ID</span>
@@ -843,7 +754,7 @@ export default function Dashboard() {
                       <select
                         value={logPrefix}
                         onChange={(e) => setLogPrefix(e.target.value)}
-                        style={{ width: 'auto', background: 'var(--bg-screen)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, textAlign: 'left' }}
+                        style={{ width: 'auto', background: 'var(--bg-screen)', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, textAlign: 'left' }}
                         title="Prefix"
                       >
                         {prefixes.map(p => (
@@ -852,10 +763,10 @@ export default function Dashboard() {
                       </select>
                       <input
                         type="text"
-                        placeholder="5-char code (e.g. 04CA7, JW6FU)"
+                        placeholder="5-char code (e.g. 04CA7)"
                         value={logOrderRef}
                         onChange={(e) => setLogOrderRef(e.target.value.toUpperCase())}
-                        style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: 700, letterSpacing: '1px' }}
+                        style={{ fontFamily: 'monospace', fontSize: '15px', fontWeight: 700, letterSpacing: '0.5px' }}
                         autoFocus
                         required
                       />
@@ -894,53 +805,41 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Field 4: Size Selector with Live Stock Count Chips */}
-                  <div style={{ padding: '10px 18px 4px 18px', borderBottom: '0.5px solid var(--divider)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span className="row-label" style={{ width: 'auto' }}>Size Handed Over</span>
-                      <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
-                        Live Tent Stock
-                      </span>
-                    </div>
+                  {/* Field 4: Size Selector */}
+                  <div className="size-chips-container">
+                    {availableSizesForSelectedCategoryColor.map(sz => {
+                      const targetSku = `${selectedCategory}|${selectedColor}|${sz}`;
+                      const stockRem = getStockRemainingAtLocation(targetSku);
+                      const isSelected = selectedSize === sz;
+                      const isOut = stockRem <= 0;
 
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', paddingBottom: '8px' }}>
-                      {availableSizesForSelectedCategoryColor.map(sz => {
-                        const targetSku = `${selectedCategory}|${selectedColor}|${sz}`;
-                        const stockRem = getStockRemainingAtLocation(targetSku);
-                        const isSelected = selectedSize === sz;
-                        const isOut = stockRem <= 0;
-
-                        return (
-                          <button
-                            key={sz}
-                            type="button"
-                            onClick={() => setSelectedSize(sz)}
-                            className={`size-pill-btn ${isSelected ? 'active' : ''} ${isOut ? 'out-of-stock' : ''}`}
-                          >
-                            <span>{sz}</span>
-                            <span className="size-stock-badge">
-                              {isOut ? 'Out' : `${stockRem} left`}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                      return (
+                        <button
+                          key={sz}
+                          type="button"
+                          onClick={() => setSelectedSize(sz)}
+                          className={`size-pill ${isSelected ? 'active' : ''} ${isOut ? 'zero-stock' : ''}`}
+                        >
+                          <span>{sz}</span>
+                          <span className="stock-hint">
+                            {isOut ? '0' : stockRem}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Field 5: Auto-Populated Amount Paid */}
                   <div className="form-row">
                     <span className="row-label">
                       Amount (KES)
-                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--label-secondary)' }}>
-                        Auto from OG Stock
-                      </span>
                     </span>
                     <div className="row-control">
                       <input
                         type="number"
                         value={logAmountPaid}
                         onChange={(e) => setLogAmountPaid(e.target.value)}
-                        style={{ fontSize: '16px', fontWeight: 700, color: 'var(--label-primary)' }}
+                        style={{ fontSize: '15px', fontWeight: 700, color: 'var(--label-primary)' }}
                         required
                       />
                     </div>
@@ -949,10 +848,7 @@ export default function Dashboard() {
                   {/* Field 6: Upgrade Cash Delta */}
                   <div className="form-row">
                     <span className="row-label">
-                      Extra Cash Delta
-                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--label-secondary)' }}>
-                        Upgrade collected
-                      </span>
+                      Cash Delta
                     </span>
                     <div className="row-control">
                       <input
@@ -960,7 +856,7 @@ export default function Dashboard() {
                         placeholder="0"
                         value={logCashCollected}
                         onChange={(e) => setLogCashCollected(e.target.value)}
-                        style={{ fontSize: '15px', fontWeight: 600, color: 'var(--accent)' }}
+                        style={{ fontSize: '14px', fontWeight: 600, color: 'var(--accent)' }}
                       />
                     </div>
                   </div>
@@ -978,17 +874,14 @@ export default function Dashboard() {
                       fontSize: '13px',
                       fontWeight: 600,
                       cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
                       padding: 0
                     }}
                   >
-                    <span>{showOptionalDetails ? 'Hide Customer & Delivery Details' : '+ Add Buyer Name / Delivery Destination (Optional)'}</span>
+                    {showOptionalDetails ? 'Hide Customer & Delivery Details' : '+ Add Customer / Delivery Details'}
                   </button>
 
                   {showOptionalDetails && (
-                    <div className="form-group" style={{ margin: '10px 0 0 0' }}>
+                    <div className="form-group" style={{ margin: '10px 0 0 0', boxShadow: 'none', border: '0.5px solid var(--divider-light)' }}>
                       <div className="form-row">
                         <span className="row-label">Buyer Name</span>
                         <div className="row-control">
@@ -1026,7 +919,7 @@ export default function Dashboard() {
                       </div>
 
                       <div className="form-row">
-                        <span className="row-label">Payment Channel</span>
+                        <span className="row-label">Channel</span>
                         <div className="row-control">
                           <select
                             value={logChannel}
@@ -1040,10 +933,10 @@ export default function Dashboard() {
                       </div>
 
                       <div className="form-row vertical">
-                        <label>Notes / Delivery Instructions</label>
+                        <label>Notes</label>
                         <textarea
                           rows={2}
-                          placeholder="e.g. Package with extra sticker..."
+                          placeholder="Delivery instructions..."
                           value={logNotes}
                           onChange={(e) => setLogNotes(e.target.value)}
                         />
@@ -1056,7 +949,6 @@ export default function Dashboard() {
                 <button
                   type="submit"
                   className="btn green block"
-                  style={{ height: '48px', fontSize: '15px', fontWeight: 700 }}
                   disabled={isPending}
                 >
                   Log Sale & Dispatch Jersey
@@ -1065,44 +957,46 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* RIGHT COLUMN: LIVE STOCK MATRIX & RECENT DISPATCHES */}
+          {/* RIGHT COLUMN: AVAILABLE STOCK & RECENT DISPATCHES */}
           <div>
-            {/* KPI Summary Tiles */}
-            <div className="event-metrics" style={{ margin: '0 0 16px 0' }}>
-              <div className="metric-item">
-                <span className="metric-lbl">Dispatched</span>
-                <span className="metric-val" style={{ color: 'var(--success)' }}>
+            {/* Minimalist KPI Row */}
+            <div className="kpi-row">
+              <div className="kpi-box">
+                <span className="kpi-lbl">Dispatched</span>
+                <span className="kpi-val" style={{ color: 'var(--success)' }}>
                   {eventMetrics.fulfilledCount} pcs
                 </span>
               </div>
-              <div className="metric-item">
-                <span className="metric-lbl">Pending Pickup</span>
-                <span className="metric-val" style={{ color: 'var(--warning)' }}>
+              <div className="kpi-box">
+                <span className="kpi-lbl">Pending</span>
+                <span className="kpi-val" style={{ color: 'var(--warning)' }}>
                   {eventMetrics.pendingCount}
                 </span>
               </div>
-              <div className="metric-item">
-                <span className="metric-lbl">Upgrade Cash</span>
-                <span className="metric-val" style={{ color: 'var(--accent)' }}>
+              <div className="kpi-box">
+                <span className="kpi-lbl">Cash Delta</span>
+                <span className="kpi-val" style={{ color: 'var(--accent)' }}>
                   +{eventMetrics.totalCashDelta.toLocaleString()} KES
                 </span>
               </div>
-              <div className="metric-item">
-                <span className="metric-lbl">Physical Stock</span>
-                <span className="metric-val" style={{ color: eventMetrics.eventStockTotal < 15 ? 'var(--destructive)' : 'var(--label-primary)' }}>
+              <div className="kpi-box">
+                <span className="kpi-lbl">Stock on Hand</span>
+                <span className="kpi-val">
                   {eventMetrics.eventStockTotal} pcs
                 </span>
               </div>
             </div>
 
-            {/* Live Stock on Hand at this Location */}
-            <div className="card" style={{ margin: '0 0 16px 0', padding: '16px' }}>
+            {/* SLEEK & MINIMALIST "AVAILABLE STOCK" CARD */}
+            <div className="card">
               <div className="card-title">
-                <span>Live Tent Stock Availability</span>
-                <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>Click size to quick-fill form</span>
+                <span>Available Stock</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--label-secondary)' }}>
+                  {activeLocation.name}
+                </span>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div className="stock-matrix-grid">
                 {availableCategories.map(cat => {
                   const catItems = stockOnHand.filter(s => s.location_id === selectedLocationId && s.category === cat);
                   if (catItems.length === 0) return null;
@@ -1110,22 +1004,18 @@ export default function Dashboard() {
                   const colors = [...new Set(catItems.map(c => c.color || 'Standard'))];
 
                   return (
-                    <div key={cat} style={{ background: 'var(--bg-screen)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--label-primary)', marginBottom: '6px' }}>
-                        {cat}
-                      </div>
+                    <div key={cat} className="stock-category-card">
+                      <div className="stock-category-name">{cat}</div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div>
                         {colors.map(col => {
                           const colItems = catItems.filter(c => (c.color || 'Standard') === col);
 
                           return (
-                            <div key={col} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '12px', color: 'var(--label-secondary)', minWidth: '70px' }}>
-                                {col}:
-                              </span>
+                            <div key={col} className="stock-variant-row">
+                              <span className="stock-color-label">{col}</span>
 
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              <div className="stock-sizes-row">
                                 {colItems.map(item => {
                                   const isZero = item.stock_on_hand <= 0;
                                   const isLow = item.stock_on_hand <= item.low_stock_threshold && !isZero;
@@ -1139,19 +1029,11 @@ export default function Dashboard() {
                                         setSelectedColor(col);
                                         setSelectedSize(item.size || 'None');
                                       }}
-                                      style={{
-                                        border: 'none',
-                                        background: isZero ? 'rgba(255,59,48,0.1)' : isLow ? 'rgba(255,149,0,0.15)' : '#FFFFFF',
-                                        color: isZero ? 'var(--destructive)' : isLow ? 'var(--warning)' : 'var(--label-primary)',
-                                        padding: '4px 8px',
-                                        borderRadius: '6px',
-                                        fontSize: '11px',
-                                        fontWeight: 600,
-                                        cursor: 'pointer'
-                                      }}
+                                      className={`stock-size-badge ${isZero ? 'zero' : isLow ? 'low' : ''}`}
                                       title="Click to fill order form"
                                     >
-                                      {item.size || 'Standard'}: <strong>{item.stock_on_hand}</strong>
+                                      <span>{item.size || 'Std'}</span>
+                                      <span className="stock-count-num">{item.stock_on_hand}</span>
                                     </button>
                                   );
                                 })}
@@ -1167,55 +1049,54 @@ export default function Dashboard() {
             </div>
 
             {/* Recent Dispatches Feed */}
-            <div className="card" style={{ padding: '16px' }}>
+            <div className="card">
               <div className="card-title">
-                <span>Recent Dispatches Today</span>
+                <span>Recent Dispatches</span>
                 <input
                   type="text"
-                  placeholder="Filter recent..."
+                  placeholder="Filter..."
                   value={recentSearchQuery}
                   onChange={(e) => setRecentSearchQuery(e.target.value)}
-                  style={{ width: '130px', fontSize: '12px', background: 'var(--bg-screen)', padding: '4px 8px', borderRadius: '6px', border: 'none' }}
+                  style={{ width: '110px', fontSize: '12px', background: 'var(--bg-subtle)', padding: '4px 8px', borderRadius: '6px', border: 'none', textAlign: 'left' }}
                 />
               </div>
 
               {recentFulfillmentsAtLocation.length === 0 ? (
-                <div className="result-empty">No dispatches logged today at this station yet.</div>
+                <div className="result-empty">No dispatches logged today at this station.</div>
               ) : (
                 <div className="list-group" style={{ margin: 0, boxShadow: 'none' }}>
                   {recentFulfillmentsAtLocation.map(order => {
                     const isSwap = order.fulfillment && order.fulfillment.actual_sku !== order.original_sku;
 
                     return (
-                      <div key={order.id} className="list-row" style={{ padding: '8px 12px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <div key={order.id} className="list-row" style={{ padding: '8px 10px', borderBottom: '0.5px solid var(--divider-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
                             <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
                               {order.source_prefix}
                             </span>
-                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)', fontSize: '13px' }}>
                               #{order.order_ref}
                             </span>
-                            <span style={{ fontSize: '12px', fontWeight: 600 }}>
+                            <span style={{ fontSize: '13px', fontWeight: 600 }}>
                               {order.customer_name || 'Walk-up'}
                             </span>
                           </div>
 
-                          <span className={`status-badge ${isSwap ? 'status-Pending-Delivery' : 'status-Collected'}`}>
-                            {isSwap ? 'Swapped' : 'Dispatched'}
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                           <div style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
                             {order.fulfillment?.actual_sku || order.original_sku} &middot; {order.amount_paid} KES
                             {order.fulfillment && order.fulfillment.cash_collected > 0 && ` (+${order.fulfillment.cash_collected} KES)`}
                           </div>
+                        </div>
 
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span className={`status-badge ${isSwap ? 'swapped' : 'dispatched'}`}>
+                            {isSwap ? 'Swapped' : 'Dispatched'}
+                          </span>
                           <button
                             onClick={() => openSwapModal(order)}
                             className="btn secondary small"
-                            style={{ fontSize: '11px', height: '24px', padding: '2px 8px' }}
+                            style={{ fontSize: '11px', height: '26px' }}
                           >
                             Swap / Fix
                           </button>
@@ -1231,21 +1112,21 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: MASTER STOCK & CATALOG (ADMINS) */}
+      {/* TAB 2: MASTER STOCK & CATALOG */}
       {/* ========================================================================= */}
       {activeTab === 'stock' && (
         <div className="two-col-grid">
-          {/* Left Column: Admin Catalog Manager & OG Pricing */}
+          {/* Left Column: Admin Catalog Manager */}
           <div>
             <div className="card">
               <div className="card-title">
-                <span>Admin SKU Catalog & OG Pricing</span>
+                <span>SKU Catalog & Pricing</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '14px' }}>
-                Define sellable jersey categories, sizes, and baseline prices. These prices automatically populate when staff log orders at tents.
+                Define jersey categories, sizes, and baseline prices. These prices automatically populate when staff log orders.
               </p>
 
-              <form onSubmit={handleSaveCatalogItem} className="form-group" style={{ margin: '0 0 16px 0' }}>
+              <form onSubmit={handleSaveCatalogItem} className="form-group" style={{ margin: '0 0 16px 0', border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
                 <div className="form-row">
                   <span className="row-label">Category</span>
                   <div className="row-control">
@@ -1286,7 +1167,7 @@ export default function Dashboard() {
                 </div>
 
                 <div className="form-row">
-                  <span className="row-label">OG Catalog Price (KES)</span>
+                  <span className="row-label">Price (KES)</span>
                   <div className="row-control">
                     <input
                       type="number"
@@ -1311,12 +1192,11 @@ export default function Dashboard() {
 
                 <div style={{ padding: '12px 18px' }}>
                   <button type="submit" className="btn green block" disabled={isPending}>
-                    {isPending ? 'Saving...' : 'Add / Update Catalog SKU & Price'}
+                    {isPending ? 'Saving...' : 'Save Catalog SKU & Price'}
                   </button>
                 </div>
               </form>
 
-              {/* Catalog Items Table */}
               <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
                 <table className="stock-table">
                   <thead>
@@ -1346,15 +1226,14 @@ export default function Dashboard() {
 
           {/* Right Column: Warehouse Stock Operations */}
           <div>
-            {/* 1. Log Warehouse Stock-In */}
             <div className="card" style={{ marginBottom: '16px' }}>
               <div className="card-title">
-                <span>1. Log Warehouse Stock-In</span>
+                <span>Warehouse Stock-In</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
                 Record incoming deliveries from suppliers into Main Warehouse stock.
               </p>
-              <form onSubmit={handleStockInSubmit} className="form-group" style={{ margin: 0 }}>
+              <form onSubmit={handleStockInSubmit} className="form-group" style={{ margin: 0, border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
                 <div className="form-row">
                   <span className="row-label">Select SKU</span>
                   <div className="row-control">
@@ -1386,7 +1265,7 @@ export default function Dashboard() {
                       type="text"
                       value={stockInNotes}
                       onChange={(e) => setStockInNotes(e.target.value)}
-                      placeholder="e.g. Official SportPesa Batch #1"
+                      placeholder="e.g. Official Batch #1"
                     />
                   </div>
                 </div>
@@ -1399,15 +1278,14 @@ export default function Dashboard() {
               </form>
             </div>
 
-            {/* 2. Stock Transfer to Event Tent */}
             <div className="card">
               <div className="card-title">
-                <span>2. Stock Transfer to Event Tent</span>
+                <span>Stock Transfer to Event Tent</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
                 Allocate merchandise from Main Warehouse to a specific event tent.
               </p>
-              <form onSubmit={handleTransferSubmit} className="form-group" style={{ margin: 0 }}>
+              <form onSubmit={handleTransferSubmit} className="form-group" style={{ margin: 0, border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
                 <div className="form-row">
                   <span className="row-label">Select SKU</span>
                   <div className="row-control">
@@ -1470,85 +1348,87 @@ export default function Dashboard() {
       {/* TAB 3: CSV IMPORTER */}
       {/* ========================================================================= */}
       {activeTab === 'importer' && (
-        <div className="full-width-card card">
-          <div className="card-title">
-            <span>Batch CSV Orders Ingest</span>
-          </div>
-          <p style={{ fontSize: '13px', color: 'var(--label-secondary)', marginBottom: '16px' }}>
-            Upload CSV exports from TikoHub or Shopify. The system dynamically splits on the first <code>-</code> to capture prefixes (<code>ORD</code>, <code>SH</code>, <code>TKH</code>), truncates the ID to 5 characters, expands multi-unit rows, and registers new prefixes automatically.
-          </p>
-
-          <div className="form-group" style={{ margin: '0 0 16px 0' }}>
-            <div className="form-row vertical">
-              <label htmlFor="csv-file-input">Select CSV Export File</label>
-              <input
-                id="csv-file-input"
-                type="file"
-                accept=".csv"
-                onChange={handleCSVFileChange}
-                style={{ textAlign: 'left', cursor: 'pointer', padding: '8px 0', fontSize: '14px', width: '100%' }}
-              />
+        <div style={{ margin: '18px 28px' }}>
+          <div className="card">
+            <div className="card-title">
+              <span>Batch CSV Orders Ingest</span>
             </div>
-          </div>
+            <p style={{ fontSize: '13px', color: 'var(--label-secondary)', marginBottom: '16px' }}>
+              Upload CSV exports from TikoHub or Shopify. The system dynamically splits on the first <code>-</code> to capture prefixes, truncates the ID to 5 characters, and expands multi-unit rows.
+            </p>
 
-          {parseResult && (
-            <>
-              <div className="event-metrics" style={{ margin: '0 0 16px 0' }}>
-                <div className="metric-item">
-                  <span className="metric-lbl">Orders Identified</span>
-                  <span className="metric-val">{parseResult.totalOrders}</span>
-                </div>
-                <div className="metric-item">
-                  <span className="metric-lbl">Expanded Units</span>
-                  <span className="metric-val" style={{ color: 'var(--accent)' }}>{parseResult.totalUnits}</span>
-                </div>
-                <div className="metric-item">
-                  <span className="metric-lbl">Discovered Prefixes</span>
-                  <span className="metric-val">{parseResult.discoveredPrefixes.join(', ') || 'ORD'}</span>
-                </div>
+            <div className="form-group" style={{ margin: '0 0 16px 0', border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
+              <div className="form-row vertical">
+                <label htmlFor="csv-file-input">Select CSV Export File</label>
+                <input
+                  id="csv-file-input"
+                  type="file"
+                  accept=".csv"
+                  onChange={handleCSVFileChange}
+                  style={{ textAlign: 'left', cursor: 'pointer', padding: '8px 0', fontSize: '14px', width: '100%' }}
+                />
               </div>
+            </div>
 
-              <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
-                <table className="stock-table">
-                  <thead>
-                    <tr>
-                      <th>Prefix & Ref</th>
-                      <th>SKU</th>
-                      <th>Paid</th>
-                      <th>Customer</th>
-                      <th>Unit Index</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parseResult.orders.map((o, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <span className={`prefix-tag ${getPrefixClass(o.source_prefix)}`}>
-                            {o.source_prefix}
-                          </span>
-                          <span style={{ fontFamily: 'monospace', fontWeight: 700, marginLeft: '4px' }}>
-                            #{o.order_ref}
-                          </span>
-                        </td>
-                        <td>{o.original_sku}</td>
-                        <td>{o.amount_paid} KES</td>
-                        <td>{o.customer_name || 'N/A'}</td>
-                        <td>Unit {o.unit_index} of {o.total_units}</td>
+            {parseResult && (
+              <>
+                <div className="kpi-row" style={{ marginBottom: '16px' }}>
+                  <div className="kpi-box">
+                    <span className="kpi-lbl">Orders</span>
+                    <span className="kpi-val">{parseResult.totalOrders}</span>
+                  </div>
+                  <div className="kpi-box">
+                    <span className="kpi-lbl">Units</span>
+                    <span className="kpi-val" style={{ color: 'var(--accent)' }}>{parseResult.totalUnits}</span>
+                  </div>
+                  <div className="kpi-box">
+                    <span className="kpi-lbl">Prefixes</span>
+                    <span className="kpi-val">{parseResult.discoveredPrefixes.join(', ') || 'ORD'}</span>
+                  </div>
+                </div>
+
+                <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
+                  <table className="stock-table">
+                    <thead>
+                      <tr>
+                        <th>Prefix & Ref</th>
+                        <th>SKU</th>
+                        <th>Paid</th>
+                        <th>Customer</th>
+                        <th>Unit</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {parseResult.orders.map((o, idx) => (
+                        <tr key={idx}>
+                          <td>
+                            <span className={`prefix-tag ${getPrefixClass(o.source_prefix)}`}>
+                              {o.source_prefix}
+                            </span>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, marginLeft: '4px' }}>
+                              #{o.order_ref}
+                            </span>
+                          </td>
+                          <td>{o.original_sku}</td>
+                          <td>{o.amount_paid} KES</td>
+                          <td>{o.customer_name || 'N/A'}</td>
+                          <td>{o.unit_index}/{o.total_units}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-              <button
-                onClick={handleImportExecute}
-                className="btn green block"
-                disabled={isPending || parseResult.orders.length === 0}
-              >
-                {isPending ? 'Importing...' : `Write ${parseResult.orders.length} Orders to Database`}
-              </button>
-            </>
-          )}
+                <button
+                  onClick={handleImportExecute}
+                  className="btn green block"
+                  disabled={isPending || parseResult.orders.length === 0}
+                >
+                  {isPending ? 'Importing...' : `Write ${parseResult.orders.length} Orders to Database`}
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -1556,18 +1436,18 @@ export default function Dashboard() {
       {/* TAB 4: RECONCILIATION & AUDIT MATRIX */}
       {/* ========================================================================= */}
       {activeTab === 'reports' && (
-        <div className="full-width-card">
+        <div style={{ margin: '18px 28px' }}>
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>Merchandise Category Reconciliation</span>
+              <span>Category Reconciliation</span>
             </div>
             <table className="stock-table">
               <thead>
                 <tr>
-                  <th>Merchandise Category</th>
-                  <th>Total Ordered</th>
-                  <th>Total Dispatched</th>
-                  <th>Swaps / Upgrades</th>
+                  <th>Category</th>
+                  <th>Ordered</th>
+                  <th>Dispatched</th>
+                  <th>Swaps</th>
                   <th>Upgrade Cash Delta</th>
                 </tr>
               </thead>
@@ -1589,7 +1469,7 @@ export default function Dashboard() {
 
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>Ordered vs. What Went Out (Audit Matrix)</span>
+              <span>Ordered vs. What Went Out</span>
             </div>
             <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
               <table className="stock-table">
@@ -1601,7 +1481,6 @@ export default function Dashboard() {
                     <th>Handed Over</th>
                     <th>Cash Delta</th>
                     <th>Location</th>
-                    <th>Staff</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1630,9 +1509,6 @@ export default function Dashboard() {
                         <td>
                           {order.fulfillment ? (locations.find(l => l.id === order.fulfillment?.location_id)?.name.split(' ')[0] || order.fulfillment?.location_id) : '—'}
                         </td>
-                        <td style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
-                          {order.fulfillment?.staff_id || '—'}
-                        </td>
                       </tr>
                     );
                   })}
@@ -1643,7 +1519,7 @@ export default function Dashboard() {
 
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>Dynamic Order Prefixes (Config Table)</span>
+              <span>Dynamic Order Prefixes</span>
             </div>
             <table className="stock-table">
               <thead>
@@ -1675,7 +1551,7 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td>
-                      <span className="stock-badge remaining">Active</span>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--success)' }}>Active</span>
                     </td>
                     <td>
                       {editingPrefix === p.prefix ? (
@@ -1700,13 +1576,13 @@ export default function Dashboard() {
             </table>
           </div>
 
-          <div className="card" style={{ borderLeft: '4px solid var(--destructive)' }}>
+          <div className="card" style={{ borderLeft: '3px solid var(--destructive)' }}>
             <div className="card-title" style={{ fontSize: '14px' }}>Developer Reset</div>
             <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
               Reset orders, fulfillments, and stock movements to clean standard seeds.
             </p>
             <button onClick={handleDbReset} className="btn danger small">
-              Reset Database to Standard Seeds
+              Reset Database
             </button>
           </div>
         </div>
@@ -1723,7 +1599,7 @@ export default function Dashboard() {
               <button onClick={() => setSwapModalOpen(false)} className="btn small secondary">Cancel</button>
             </div>
 
-            <div className="form-group" style={{ margin: '0 0 16px 0' }}>
+            <div className="form-group" style={{ margin: '0 0 16px 0', border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
               <div className="form-row">
                 <span className="row-label">Order Ref</span>
                 <span className="row-control" style={{ fontWeight: 700, color: 'var(--accent)' }}>
@@ -1760,7 +1636,7 @@ export default function Dashboard() {
               </span>
             </div>
 
-            <div className="form-group" style={{ margin: '0 0 16px 0' }}>
+            <div className="form-group" style={{ margin: '0 0 16px 0', border: '0.5px solid var(--divider-light)', boxShadow: 'none' }}>
               <div className="form-row">
                 <span className="row-label">Cash Collected</span>
                 <div className="row-control">
@@ -1809,7 +1685,7 @@ export default function Dashboard() {
 
       {/* Footer */}
       <footer className="footer-bar">
-        Fulfilled By Griphine &middot; Direct Order Logging & Multi-Tenant Event Dispatch &middot; Apple HIG System
+        Fulfilled by Griphine &middot; Event Inventory & Dispatch System
       </footer>
     </main>
   );
