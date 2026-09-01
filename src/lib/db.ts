@@ -107,70 +107,86 @@ const INITIAL_PREFIXES: OrderPrefix[] = [
 ];
 
 const INITIAL_CATALOG: CatalogItem[] = [
+  { sku: 'Fan Jersey|White|XS', category: 'Fan Jersey', color: 'White', size: 'XS', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|White|S', category: 'Fan Jersey', color: 'White', size: 'S', price: 2500, low_stock_threshold: 10 },
   { sku: 'Fan Jersey|White|M', category: 'Fan Jersey', color: 'White', size: 'M', price: 2500, low_stock_threshold: 15 },
-  { sku: 'Fan Jersey|White|L', category: 'Fan Jersey', color: 'White', size: 'L', price: 2500, low_stock_threshold: 15 },
-  { sku: 'Fan Jersey|White|XL', category: 'Fan Jersey', color: 'White', size: 'XL', price: 2500, low_stock_threshold: 10 },
-  { sku: 'Fan Jersey|White|XXL', category: 'Fan Jersey', color: 'White', size: 'XXL', price: 2500, low_stock_threshold: 5 },
+  { sku: 'Fan Jersey|White|L', category: 'Fan Jersey', color: 'White', size: 'L', price: 2500, low_stock_threshold: 20 },
+  { sku: 'Fan Jersey|White|XL', category: 'Fan Jersey', color: 'White', size: 'XL', price: 2500, low_stock_threshold: 20 },
+  { sku: 'Fan Jersey|White|2XL', category: 'Fan Jersey', color: 'White', size: '2XL', price: 2500, low_stock_threshold: 10 },
+  { sku: 'Fan Jersey|White|3XL', category: 'Fan Jersey', color: 'White', size: '3XL', price: 2500, low_stock_threshold: 5 },
+  { sku: 'Fan Jersey|White|4XL', category: 'Fan Jersey', color: 'White', size: '4XL', price: 2500, low_stock_threshold: 3 },
+  { sku: 'Fan Jersey|White|5XL', category: 'Fan Jersey', color: 'White', size: '5XL', price: 2500, low_stock_threshold: 2 },
+  { sku: 'Fan Jersey|Red|XS', category: 'Fan Jersey', color: 'Red', size: 'XS', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|Red|S', category: 'Fan Jersey', color: 'Red', size: 'S', price: 2500, low_stock_threshold: 10 },
   { sku: 'Fan Jersey|Red|M', category: 'Fan Jersey', color: 'Red', size: 'M', price: 2500, low_stock_threshold: 15 },
   { sku: 'Fan Jersey|Red|L', category: 'Fan Jersey', color: 'Red', size: 'L', price: 2500, low_stock_threshold: 15 },
   { sku: 'Fan Jersey|Red|XL', category: 'Fan Jersey', color: 'Red', size: 'XL', price: 2500, low_stock_threshold: 10 },
-  { sku: 'Fan Jersey|Red|XXL', category: 'Fan Jersey', color: 'Red', size: 'XXL', price: 2500, low_stock_threshold: 5 },
-  { sku: 'Fan Jersey|Black|S', category: 'Fan Jersey', color: 'Black', size: 'S', price: 2500, low_stock_threshold: 10 },
-  { sku: 'Fan Jersey|Black|M', category: 'Fan Jersey', color: 'Black', size: 'M', price: 2500, low_stock_threshold: 15 },
-  { sku: 'Fan Jersey|Black|L', category: 'Fan Jersey', color: 'Black', size: 'L', price: 2500, low_stock_threshold: 15 },
-  { sku: 'Fan Jersey|Black|XL', category: 'Fan Jersey', color: 'Black', size: 'XL', price: 2500, low_stock_threshold: 10 },
-  { sku: 'Fan Jersey|Black|XXL', category: 'Fan Jersey', color: 'Black', size: 'XXL', price: 2500, low_stock_threshold: 5 },
+  { sku: 'Fan Jersey|Red|2XL', category: 'Fan Jersey', color: 'Red', size: '2XL', price: 2500, low_stock_threshold: 10 },
+  { sku: 'Fan Jersey|Red|3XL', category: 'Fan Jersey', color: 'Red', size: '3XL', price: 2500, low_stock_threshold: 5 },
+  { sku: 'Fan Jersey|Red|4XL', category: 'Fan Jersey', color: 'Red', size: '4XL', price: 2500, low_stock_threshold: 2 },
+  { sku: 'Fan Jersey|Red|5XL', category: 'Fan Jersey', color: 'Red', size: '5XL', price: 2500, low_stock_threshold: 2 },
   { sku: 'Crew Neck|Navy|S', category: 'Crew Neck', color: 'Navy', size: 'S', price: 2250, low_stock_threshold: 8 },
   { sku: 'Crew Neck|Navy|M', category: 'Crew Neck', color: 'Navy', size: 'M', price: 2250, low_stock_threshold: 10 },
   { sku: 'Crew Neck|Navy|L', category: 'Crew Neck', color: 'Navy', size: 'L', price: 2250, low_stock_threshold: 10 },
   { sku: 'Crew Neck|Navy|XL', category: 'Crew Neck', color: 'Navy', size: 'XL', price: 2250, low_stock_threshold: 8 },
-  { sku: 'Crew Neck|Grey|S', category: 'Crew Neck', color: 'Grey', size: 'S', price: 2250, low_stock_threshold: 8 },
-  { sku: 'Crew Neck|Grey|M', category: 'Crew Neck', color: 'Grey', size: 'M', price: 2250, low_stock_threshold: 10 },
-  { sku: 'Crew Neck|Grey|L', category: 'Crew Neck', color: 'Grey', size: 'L', price: 2250, low_stock_threshold: 10 },
-  { sku: 'Crew Neck|Grey|XL', category: 'Crew Neck', color: 'Grey', size: 'XL', price: 2250, low_stock_threshold: 8 },
-  { sku: 'Crew Neck|Black|S', category: 'Crew Neck', color: 'Black', size: 'S', price: 2250, low_stock_threshold: 8 },
-  { sku: 'Crew Neck|Black|M', category: 'Crew Neck', color: 'Black', size: 'M', price: 2250, low_stock_threshold: 10 },
-  { sku: 'Crew Neck|Black|L', category: 'Crew Neck', color: 'Black', size: 'L', price: 2250, low_stock_threshold: 10 },
-  { sku: 'Crew Neck|Black|XL', category: 'Crew Neck', color: 'Black', size: 'XL', price: 2250, low_stock_threshold: 8 },
   { sku: 'KRU Replica|Green|S', category: 'KRU Replica', color: 'Green', size: 'S', price: 3000, low_stock_threshold: 5 },
   { sku: 'KRU Replica|Green|M', category: 'KRU Replica', color: 'Green', size: 'M', price: 3000, low_stock_threshold: 8 },
   { sku: 'KRU Replica|Green|L', category: 'KRU Replica', color: 'Green', size: 'L', price: 3000, low_stock_threshold: 8 },
-  { sku: 'KRU Replica|Green|XL', category: 'KRU Replica', color: 'Green', size: 'XL', price: 3000, low_stock_threshold: 5 },
-  { sku: 'KRU Replica|Green|XXL', category: 'KRU Replica', color: 'Green', size: 'XXL', price: 3000, low_stock_threshold: 4 },
-  { sku: 'KRU Replica|Red|M', category: 'KRU Replica', color: 'Red', size: 'M', price: 3000, low_stock_threshold: 8 },
-  { sku: 'KRU Replica|Red|L', category: 'KRU Replica', color: 'Red', size: 'L', price: 3000, low_stock_threshold: 8 },
-  { sku: 'Bucket Hat|Black|None', category: 'Bucket Hat', color: 'Black', size: null, price: 1000, low_stock_threshold: 10 },
-  { sku: 'Bucket Hat|Beige|None', category: 'Bucket Hat', color: 'Beige', size: null, price: 1000, low_stock_threshold: 10 },
-  { sku: 'Tank Top|White|S', category: 'Tank Top', color: 'White', size: 'S', price: 1200, low_stock_threshold: 5 },
-  { sku: 'Tank Top|White|M', category: 'Tank Top', color: 'White', size: 'M', price: 1200, low_stock_threshold: 8 },
-  { sku: 'Tank Top|White|L', category: 'Tank Top', color: 'White', size: 'L', price: 1200, low_stock_threshold: 8 },
-  { sku: 'Tank Top|Black|S', category: 'Tank Top', color: 'Black', size: 'S', price: 1200, low_stock_threshold: 5 },
-  { sku: 'Tank Top|Black|M', category: 'Tank Top', color: 'Black', size: 'M', price: 1200, low_stock_threshold: 8 },
-  { sku: 'Tank Top|Black|L', category: 'Tank Top', color: 'Black', size: 'L', price: 1200, low_stock_threshold: 8 }
+  { sku: 'KRU Replica|Green|XL', category: 'KRU Replica', color: 'Green', size: 'XL', price: 3000, low_stock_threshold: 5 }
 ];
 
 const INITIAL_LEDGER: LedgerRow[] = [
-  { id: 'led-1', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|M', quantity_delta: 100, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'SportPesa Supplier Stock-In' },
-  { id: 'led-2', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|L', quantity_delta: 120, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'SportPesa Supplier Stock-In' },
-  { id: 'led-3', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|L', quantity_delta: 100, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'SportPesa Supplier Stock-In' },
-  { id: 'led-4', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|L', quantity_delta: 80, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Supplier Batch Intake' },
-  { id: 'led-5', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|L', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Official KRU Batch' },
+  // SportPesa 7s Initial Received Allocation (974 units total received from warehouse/supplier)
+  { id: 'led-sp-01', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|XS', quantity_delta: 20, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-02', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|XS', quantity_delta: 20, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-03', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|S', quantity_delta: 31, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-04', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|S', quantity_delta: 10, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-05', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|M', quantity_delta: 62, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-06', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|M', quantity_delta: 54, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-07', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|L', quantity_delta: 197, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-08', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|L', quantity_delta: 121, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-09', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|XL', quantity_delta: 246, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-10', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|XL', quantity_delta: 53, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-11', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|2XL', quantity_delta: 47, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-12', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|2XL', quantity_delta: 43, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-13', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|3XL', quantity_delta: 33, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-14', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|3XL', quantity_delta: 27, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
+  { id: 'led-sp-15', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|4XL', quantity_delta: 10, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'SportPesa 7s Received Stock' },
 
-  // Stock allocation from WH to SportPesa 7s Tent
-  { id: 'led-6', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|M', quantity_delta: -30, location_id: 'wh-main', staff_id: 'Winston (Admin)', amount: 0, notes: 'Allocated to SportPesa 7s Tent' },
-  { id: 'led-7', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|M', quantity_delta: 30, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'Received from Warehouse Dispatch' },
-  { id: 'led-8', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|L', quantity_delta: -35, location_id: 'wh-main', staff_id: 'Winston (Admin)', amount: 0, notes: 'Allocated to SportPesa 7s Tent' },
-  { id: 'led-9', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|L', quantity_delta: 35, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'Received from Warehouse Dispatch' },
-  { id: 'led-10', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Crew Neck|Navy|L', quantity_delta: -20, location_id: 'wh-main', staff_id: 'Winston (Admin)', amount: 0, notes: 'Allocated to SportPesa 7s Tent' },
-  { id: 'led-11', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Crew Neck|Navy|L', quantity_delta: 20, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'Received from Warehouse Dispatch' }
+  // Initial Delivered Stock (461 units delivered total)
+  { id: 'led-sp-d01', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|XS', quantity_delta: -11, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 27500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d02', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|XS', quantity_delta: -8, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 20000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d03', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|S', quantity_delta: -24, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 60000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d04', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|S', quantity_delta: -8, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 20000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d05', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|M', quantity_delta: -47, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 117500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d06', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|M', quantity_delta: -39, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 97500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d07', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|L', quantity_delta: -84, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 210000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d08', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|L', quantity_delta: -62, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 155000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d09', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|XL', quantity_delta: -63, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 157500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d10', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|XL', quantity_delta: -49, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 122500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d11', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|2XL', quantity_delta: -23, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 57500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d12', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|2XL', quantity_delta: -16, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 40000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d13', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|3XL', quantity_delta: -11, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 27500, notes: 'Event Dispatch' },
+  { id: 'led-sp-d14', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|3XL', quantity_delta: -12, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 30000, notes: 'Event Dispatch' },
+  { id: 'led-sp-d15', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|4XL', quantity_delta: -4, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 10000, notes: 'Event Dispatch' },
+
+  // Warehouse standard stock
+  { id: 'led-wh-01', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|L', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse stock' },
+  { id: 'led-wh-02', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|L', quantity_delta: 40, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse stock' }
 ];
 
 const INITIAL_ORDERS: Order[] = [
-  { id: 'ord-01', source_prefix: 'ORD', order_ref: '04CA7', original_sku: 'Fan Jersey|White|M', amount_paid: 2500, customer_name: 'Kevin Omondi', customer_phone: '0712345678', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 5).toISOString() },
-  { id: 'ord-02', source_prefix: 'SH',  order_ref: 'JW6FU', original_sku: 'Crew Neck|Navy|L', amount_paid: 2250, customer_name: 'Brian Kiprop', customer_phone: '0723456789', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 4).toISOString() },
-  { id: 'ord-03', source_prefix: 'ORD', order_ref: '9B3D1', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Faith Mutua', customer_phone: '0734567890', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 3).toISOString() }
+  // 6 pending uncollected orders from the Google Sheet
+  { id: 'ord-p01', source_prefix: 'ORD', order_ref: '04CA7', original_sku: 'Fan Jersey|White|M', amount_paid: 2500, customer_name: 'Kevin Omondi', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 8).toISOString() },
+  { id: 'ord-p02', source_prefix: 'ORD', order_ref: '9B3D1', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Faith Mutua', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 7).toISOString() },
+  { id: 'ord-p03', source_prefix: 'ORD', order_ref: '8E4C2', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Alex Otieno', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 6).toISOString() },
+  { id: 'ord-p04', source_prefix: 'ORD', order_ref: '1F7A9', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Grace Wanjiku', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 5).toISOString() },
+  { id: 'ord-p05', source_prefix: 'ORD', order_ref: '3D2C8', original_sku: 'Fan Jersey|Red|2XL', amount_paid: 2500, customer_name: 'David Mwangi', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 4).toISOString() },
+  { id: 'ord-p06', source_prefix: 'ORD', order_ref: '7A1E4', original_sku: 'Fan Jersey|White|5XL', amount_paid: 2500, customer_name: 'Peter Koech', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 3).toISOString() },
+
+  // Sample fulfilled orders
+  { id: 'ord-f01', source_prefix: 'ORD', order_ref: 'JW6FU', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Brian Kiprop', channel: 'Online', status: 'fulfilled', created_at: new Date(Date.now() - 86400000).toISOString() },
+  { id: 'ord-f02', source_prefix: 'SH', order_ref: '5H9K2', original_sku: 'Fan Jersey|Red|M', amount_paid: 2500, customer_name: 'Mary Achieng', channel: 'Card', status: 'fulfilled', created_at: new Date(Date.now() - 86400000).toISOString() }
 ];
 
 // In-memory persistent fallback state when running locally / disconnected
@@ -178,7 +194,10 @@ let memoryLocations = [...INITIAL_LOCATIONS];
 let memoryPrefixes = [...INITIAL_PREFIXES];
 let memoryCatalog = [...INITIAL_CATALOG];
 let memoryOrders = [...INITIAL_ORDERS];
-let memoryFulfillments: Fulfillment[] = [];
+let memoryFulfillments: Fulfillment[] = [
+  { id: 'ful-f01', order_id: 'ord-f01', source_prefix: 'ORD', order_ref: 'JW6FU', original_sku: 'Fan Jersey|White|L', actual_sku: 'Fan Jersey|White|L', price_delta: 0, cash_collected: 0, location_id: 'evt-sp7s', staff_id: 'Staff', fulfilled_at: new Date(Date.now() - 86400000).toISOString() },
+  { id: 'ful-f02', order_id: 'ord-f02', source_prefix: 'SH', order_ref: '5H9K2', original_sku: 'Fan Jersey|Red|M', actual_sku: 'Fan Jersey|Red|M', price_delta: 0, cash_collected: 0, location_id: 'evt-sp7s', staff_id: 'Staff', fulfilled_at: new Date(Date.now() - 86400000).toISOString() }
+];
 let memoryLedger = [...INITIAL_LEDGER];
 
 // Helper to ensure SKU exists in catalog

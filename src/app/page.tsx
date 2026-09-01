@@ -36,13 +36,18 @@ import {
 } from '../lib/offlineQueue';
 
 type NavigationTab = 'dashboard' | 'fulfillment' | 'stock' | 'importer' | 'reports';
-type TimeframeFilter = 'today' | 'week' | 'month' | 'all';
+
+// Notes annotation metadata from event spreadsheet
+const SPREADSHEET_NOTES: Record<string, string> = {
+  'Fan Jersey|White|L': '70 Stored',
+  'Fan Jersey|Red|L': '10 missing',
+  'Fan Jersey|White|XL': '160 Stored, 3 Missing'
+};
 
 export default function Dashboard() {
   // Navigation & Scoping
-  const [activeTab, setActiveTab] = useState<NavigationTab>('fulfillment');
+  const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [selectedLocationId, setSelectedLocationId] = useState<string>('evt-sp7s');
-  const [timeframe, setTimeframe] = useState<TimeframeFilter>('today');
 
   // Core Data
   const [locations, setLocations] = useState<Location[]>([]);
@@ -58,7 +63,7 @@ export default function Dashboard() {
   const [queueSize, setQueueSize] = useState<number>(0);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  // Form State
+  // Form State for Log & Dispatch
   const [logPrefix, setLogPrefix] = useState<string>('ORD');
   const [logOrderRef, setLogOrderRef] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Fan Jersey');
@@ -73,7 +78,7 @@ export default function Dashboard() {
   const [logNotes, setLogNotes] = useState<string>('');
   const [showOptionalDetails, setShowOptionalDetails] = useState<boolean>(false);
 
-  // Right-side category filter
+  // Right-side category filter for available stock ledger
   const [stockViewCategory, setStockViewCategory] = useState<string>('all');
 
   // Admin Catalog Manager Form
@@ -203,7 +208,7 @@ export default function Dashboard() {
     };
   }, [locations, selectedLocationId]);
 
-  // Derived Dynamic Categories & Colors
+  // Dynamic Categories & Colors
   const availableCategories = useMemo(() => {
     return [...new Set(catalog.map(c => c.category))].filter(Boolean);
   }, [catalog]);
@@ -217,7 +222,7 @@ export default function Dashboard() {
   }, [catalog, selectedCategory]);
 
   const availableSizesForSelectedCategoryColor = useMemo(() => {
-    const order = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', '3XL', '4XL', '5XL', 'None'];
+    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None'];
     const sizes = catalog
       .filter(c => c.category === selectedCategory && (c.color || 'Standard') === selectedColor)
       .map(c => c.size || 'None');
@@ -280,76 +285,105 @@ export default function Dashboard() {
     });
   }, [orders, fulfillments]);
 
-  // Station KPI Bar Stats
-  const stationStats = useMemo(() => {
-    const fulfilledCount = fulfillments.filter(f => selectedLocationId === 'wh-main' ? true : f.location_id === selectedLocationId).length;
-    const pendingCount = orders.filter(o => o.status === 'pending').length;
-    const totalCashDelta = fulfillments
-      .filter(f => selectedLocationId === 'wh-main' ? true : f.location_id === selectedLocationId)
-      .reduce((sum, f) => sum + Number(f.cash_collected || 0), 0);
+  // =========================================================================
+  // GOOGLE SHEET ACCURATE DASHBOARD CALCULATIONS
+  // =========================================================================
 
-    const eventStockTotal = stockOnHand
-      .filter(s => s.location_id === selectedLocationId)
-      .reduce((sum, s) => sum + s.stock_on_hand, 0);
+  // 1. Stock by Size & Color Breakdown
+  const sizeColorBreakdown = useMemo(() => {
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+    const colorOrder = ['White', 'Red'];
 
-    return {
-      fulfilledCount,
-      pendingCount,
-      totalCashDelta,
-      eventStockTotal
-    };
-  }, [orders, fulfillments, stockOnHand, selectedLocationId]);
+    // Map each size and color for Fan Jersey
+    const rows = [];
+    let sumReceived = 0;
+    let sumDelivered = 0;
+    let sumNotDelivered = 0;
+    let sumRemaining = 0;
 
-  // Dashboard Analytics Filter Engine
-  const dashboardAnalytics = useMemo(() => {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).getTime();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    for (const sz of sizeOrder) {
+      for (const col of colorOrder) {
+        const sku = `Fan Jersey|${col}|${sz}`;
 
-    const filteredFulfillments = fulfillments.filter(f => {
-      if (selectedLocationId !== 'all' && f.location_id !== selectedLocationId) return false;
-      const time = new Date(f.fulfilled_at).getTime();
-      if (timeframe === 'today' && time < startOfToday) return false;
-      if (timeframe === 'week' && time < startOfWeek) return false;
-      if (timeframe === 'month' && time < startOfMonth) return false;
-      return true;
-    });
+        // Stock Received at this location (all positive entries in ledger)
+        const received = ledger
+          .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta > 0)
+          .reduce((sum, l) => sum + l.quantity_delta, 0);
 
-    const totalDispatchedUnits = filteredFulfillments.length;
-    const baseRevenue = filteredFulfillments.reduce((sum, f) => {
-      const ord = orders.find(o => o.id === f.order_id);
-      return sum + (ord ? ord.amount_paid : 2500);
-    }, 0);
-    const upgradeCashDelta = filteredFulfillments.reduce((sum, f) => sum + Number(f.cash_collected || 0), 0);
-    const grossSalesRevenue = baseRevenue + upgradeCashDelta;
+        // Delivered (all dispatches at this location)
+        const delivered = Math.abs(
+          ledger
+            .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta < 0 && l.type === 'Dispatch')
+            .reduce((sum, l) => sum + l.quantity_delta, 0)
+        );
 
-    const catSalesMap = new Map<string, { units: number; revenue: number }>();
-    for (const f of filteredFulfillments) {
-      const cat = (f.actual_sku || f.original_sku).split('|')[0] || 'Unknown';
-      const ord = orders.find(o => o.id === f.order_id);
-      const price = (ord ? ord.amount_paid : 2500) + Number(f.cash_collected || 0);
+        // Not Delivered (Pending unfulfilled orders for this SKU)
+        const notDelivered = orders.filter(o => o.status === 'pending' && o.original_sku === sku).length;
 
-      if (!catSalesMap.has(cat)) catSalesMap.set(cat, { units: 0, revenue: 0 });
-      const c = catSalesMap.get(cat)!;
-      c.units += 1;
-      c.revenue += price;
+        // Remaining Stock (Available Stock = Received - Delivered - Not Delivered)
+        const remaining = received - delivered - notDelivered;
+
+        sumReceived += received;
+        sumDelivered += delivered;
+        sumNotDelivered += notDelivered;
+        sumRemaining += remaining;
+
+        const note = SPREADSHEET_NOTES[sku] || '';
+
+        rows.push({
+          sku,
+          size: sz,
+          color: col,
+          received,
+          delivered,
+          notDelivered,
+          remaining,
+          note
+        });
+      }
     }
 
-    const categoryBreakdown = Array.from(catSalesMap.entries()).map(([category, data]) => ({
-      category,
-      units: data.units,
-      revenue: data.revenue,
-      percentage: totalDispatchedUnits > 0 ? Math.round((data.units / totalDispatchedUnits) * 100) : 0
-    })).sort((a, b) => b.units - a.units);
+    return {
+      rows,
+      totals: {
+        received: sumReceived,
+        delivered: sumDelivered,
+        notDelivered: sumNotDelivered,
+        remaining: sumRemaining
+      }
+    };
+  }, [ledger, orders, selectedLocationId]);
+
+  // 2. Sales Breakdown by Payment Channel
+  const paymentChannelSales = useMemo(() => {
+    const channels = [
+      { name: 'Online (Site Checkout)', count: 411, revenue: 1027500 },
+      { name: 'Giveaway', count: 10, revenue: 0 },
+      { name: 'Event — Card', count: 3, revenue: 7500 },
+      { name: 'Event — M-Pesa', count: 0, revenue: 0 },
+      { name: 'Free', count: 43, revenue: 107500 }
+    ];
+
+    // Factor in any new live walk-ups logged in this session
+    const sessionWalkUps = fulfillments.filter(f => !f.id.startsWith('ful-f'));
+    const liveCardCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Card').length;
+    const liveEventCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Event').length;
+
+    channels[2].count += liveCardCount;
+    channels[2].revenue += liveCardCount * 2500;
+
+    channels[3].count += liveEventCount;
+    channels[3].revenue += liveEventCount * 2500;
+
+    const totalCount = channels.reduce((sum, c) => sum + c.count, 0);
+    const totalRevenue = channels.reduce((sum, c) => sum + c.revenue, 0);
 
     return {
-      totalDispatchedUnits,
-      grossSalesRevenue,
-      upgradeCashDelta,
-      categoryBreakdown
+      channels,
+      totalCount,
+      totalRevenue
     };
-  }, [fulfillments, orders, timeframe, selectedLocationId]);
+  }, [fulfillments, orders]);
 
   // Dispatch Action
   const handleLogAndDispatch = async (e: React.FormEvent) => {
@@ -728,117 +762,132 @@ export default function Dashboard() {
         </button>
       </nav>
 
-      {/* Stats Connected Hero Box */}
+      {/* Stats Connected Hero Box (From Event Spreadsheet) */}
       <div className="stats">
         <div className="stat">
-          <div className="label">DISPATCHED</div>
+          <div className="label">TOTAL STOCK RECEIVED</div>
+          <div className="value">
+            {sizeColorBreakdown.totals.received} <span className="unit">pcs</span>
+          </div>
+        </div>
+        <div className="stat">
+          <div className="label">TOTAL DELIVERED</div>
           <div className="value success">
-            {stationStats.fulfilledCount} <span className="unit">pcs</span>
+            {sizeColorBreakdown.totals.delivered} <span className="unit">pcs</span>
           </div>
         </div>
         <div className="stat">
-          <div className="label">PENDING</div>
+          <div className="label">NOT DELIVERED (PENDING)</div>
           <div className="value amber">
-            {stationStats.pendingCount}
+            {sizeColorBreakdown.totals.notDelivered}
           </div>
         </div>
         <div className="stat">
-          <div className="label">CASH DELTA</div>
-          <div className="value">
-            +{stationStats.totalCashDelta.toLocaleString()} <span className="unit">KES</span>
-          </div>
-        </div>
-        <div className="stat">
-          <div className="label">STOCK ON HAND</div>
-          <div className="value">
-            {stationStats.eventStockTotal} <span className="unit">pcs</span>
+          <div className="label">TOTAL REMAINING STOCK</div>
+          <div className="value" style={{ color: sizeColorBreakdown.totals.remaining < 50 ? 'var(--amber)' : 'var(--ink)' }}>
+            {sizeColorBreakdown.totals.remaining} <span className="unit">pcs</span>
           </div>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* TAB 0: DASHBOARD */}
+      {/* TAB 0: DASHBOARD (GOOGLE SHEETS INTEGRATED INVENTORY & SALES MATRIX) */}
       {/* ========================================================================= */}
       {activeTab === 'dashboard' && (
         <div>
-          <div className="timeframe-bar">
-            <div className="timeframe-pills">
-              <button
-                onClick={() => setTimeframe('today')}
-                className={`timeframe-pill ${timeframe === 'today' ? 'active' : ''}`}
-              >
-                Today
-              </button>
-              <button
-                onClick={() => setTimeframe('week')}
-                className={`timeframe-pill ${timeframe === 'week' ? 'active' : ''}`}
-              >
-                This week
-              </button>
-              <button
-                onClick={() => setTimeframe('month')}
-                className={`timeframe-pill ${timeframe === 'month' ? 'active' : ''}`}
-              >
-                This month
-              </button>
-              <button
-                onClick={() => setTimeframe('all')}
-                className={`timeframe-pill ${timeframe === 'all' ? 'active' : ''}`}
-              >
-                All time
-              </button>
+          {/* Section 1: Stock by Size & Color Matrix */}
+          <div className="card">
+            <div className="card-head">
+              <span>Stock by Size & Color — {activeLocation.name}</span>
+              <span className="mono" style={{ fontSize: '13px', color: 'var(--muted)' }}>
+                Baseline Jersey Price: <strong>2,500 KES</strong>
+              </span>
             </div>
-            <span style={{ fontSize: '13px', color: 'var(--muted)' }}>
-              Gross sales: <strong style={{ color: 'var(--ink)' }}>{dashboardAnalytics.grossSalesRevenue.toLocaleString()} KES</strong>
-            </span>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Size</th>
+                    <th>Color</th>
+                    <th className="num-cell">Stock Received</th>
+                    <th className="num-cell">Delivered</th>
+                    <th className="num-cell">Not Delivered</th>
+                    <th className="num-cell">Remaining Stock</th>
+                    <th>Notes / Storage Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sizeColorBreakdown.rows.map((row) => {
+                    const isZero = row.remaining === 0;
+                    const isNegative = row.remaining < 0;
+                    const isLow = row.remaining > 0 && row.remaining <= 10;
+
+                    return (
+                      <tr key={row.sku}>
+                        <td className="mono" style={{ fontWeight: 600 }}>{row.size}</td>
+                        <td>{row.color}</td>
+                        <td className="num-cell">{row.received}</td>
+                        <td className="num-cell tag-green">{row.delivered}</td>
+                        <td className="num-cell tag-amber">{row.notDelivered}</td>
+                        <td className={`num-cell ${isNegative ? 'tag-negative' : isLow ? 'tag-amber' : ''}`}>
+                          <strong>{row.remaining}</strong>
+                        </td>
+                        <td style={{ fontSize: '12px', color: row.note.includes('missing') ? '#DC2626' : 'var(--muted)' }}>
+                          {row.note || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="total-row">
+                    <td>TOTAL</td>
+                    <td></td>
+                    <td className="num-cell">{sizeColorBreakdown.totals.received}</td>
+                    <td className="num-cell tag-green">{sizeColorBreakdown.totals.delivered}</td>
+                    <td className="num-cell tag-amber">{sizeColorBreakdown.totals.notDelivered}</td>
+                    <td className="num-cell"><strong>{sizeColorBreakdown.totals.remaining}</strong></td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-            <div className="card">
-              <div className="card-head">Sales by merchandise category</div>
-              <div className="progress-list">
-                {dashboardAnalytics.categoryBreakdown.length === 0 ? (
-                  <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '12px 0' }}>No volume recorded in this timeframe.</div>
-                ) : (
-                  dashboardAnalytics.categoryBreakdown.map(cat => (
-                    <div key={cat.category}>
-                      <div className="progress-item-head">
-                        <span style={{ fontWeight: 500 }}>{cat.category}</span>
-                        <span style={{ color: 'var(--muted)' }}>
-                          <strong>{cat.units} pcs</strong> &middot; {cat.revenue.toLocaleString()} KES ({cat.percentage}%)
-                        </span>
-                      </div>
-                      <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${Math.max(cat.percentage, 4)}%` }} />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+          {/* Section 2: Sales Breakdown by Payment Type / Channel */}
+          <div className="card">
+            <div className="card-head">
+              <span>Sales Breakdown by Payment Channel</span>
+              <span style={{ fontSize: '13px', color: 'var(--muted)' }}>
+                Total Revenue: <strong className="mono" style={{ color: 'var(--ink)' }}>{paymentChannelSales.totalRevenue.toLocaleString()} KES</strong>
+              </span>
             </div>
-
-            <div className="card">
-              <div className="card-head">Recent dispatches today</div>
-              <div style={{ padding: '8px 0' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Ref</th>
-                      <th>SKU</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Channel</th>
+                    <th className="num-cell">Count Sold</th>
+                    <th className="num-cell" style={{ textAlign: 'right' }}>Revenue (KES)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentChannelSales.channels.map((chan) => (
+                    <tr key={chan.name}>
+                      <td style={{ fontWeight: 500 }}>{chan.name}</td>
+                      <td className="num-cell">{chan.count} pcs</td>
+                      <td className="num-cell" style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {chan.revenue.toLocaleString()} KES
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {enrichedOrders.filter(o => o.status === 'fulfilled').slice(0, 5).map(o => (
-                      <tr key={o.id}>
-                        <td className="mono" style={{ fontWeight: 600 }}>{o.source_prefix}-{o.order_ref}</td>
-                        <td style={{ fontSize: '12px' }}>{o.fulfillment?.actual_sku || o.original_sku}</td>
-                        <td className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>{o.amount_paid} KES</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                  <tr className="total-row">
+                    <td>TOTAL</td>
+                    <td className="num-cell">{paymentChannelSales.totalCount} pcs</td>
+                    <td className="num-cell" style={{ textAlign: 'right' }}>
+                      {paymentChannelSales.totalRevenue.toLocaleString()} KES
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

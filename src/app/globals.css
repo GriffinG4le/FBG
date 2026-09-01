@@ -83,12 +83,6 @@ header {
   font-weight: 600;
 }
 
-.loc-switch-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
 .loc-switch {
   display: flex;
   align-items: center;
@@ -102,10 +96,6 @@ header {
   cursor: pointer;
   outline: none;
   font-family: 'Inter', sans-serif;
-}
-
-.loc-switch .dim {
-  color: var(--muted);
 }
 
 .loc-switch select {
@@ -225,16 +215,18 @@ nav a.active, nav button.active {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
+  margin-bottom: 24px;
 }
 
 .card-head {
-  padding: 18px 20px 0;
+  padding: 18px 20px 14px;
   font-size: 15px;
   font-weight: 500;
   color: var(--ink);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  border-bottom: 1px solid var(--line);
 }
 
 /* Form */
@@ -532,78 +524,7 @@ select.cat-select {
   opacity: 0.45;
 }
 
-/* Dashboard Filter Bar & Elements */
-.timeframe-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 22px;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.timeframe-pills {
-  display: flex;
-  background: #ECEEF2;
-  padding: 3px;
-  border-radius: 8px;
-  gap: 2px;
-}
-
-.timeframe-pill {
-  padding: 6px 14px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  font-family: 'Inter', sans-serif;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.timeframe-pill:hover {
-  color: var(--ink);
-}
-
-.timeframe-pill.active {
-  background: var(--panel);
-  color: var(--ink);
-  font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-}
-
-/* Progress Bars */
-.progress-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px 20px 20px;
-}
-
-.progress-item-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.progress-track {
-  width: 100%;
-  height: 6px;
-  background: var(--bg);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--ink);
-  border-radius: 3px;
-}
-
-/* Tables */
+/* Tables & Spreadsheet Matrix */
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -629,6 +550,32 @@ select.cat-select {
 
 .data-table tr:last-child td {
   border-bottom: none;
+}
+
+.data-table tr.total-row td {
+  font-weight: 700;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.num-cell {
+  font-family: 'IBM Plex Mono', monospace;
+  text-align: right;
+}
+
+.tag-amber {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.tag-green {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.tag-negative {
+  color: #DC2626;
+  font-weight: 700;
 }
 
 /* Modals */
