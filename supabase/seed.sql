@@ -12,7 +12,17 @@ ON CONFLICT (id) DO UPDATE SET
     type = EXCLUDED.type,
     status = EXCLUDED.status;
 
--- 2. Seed Catalog with Complete SKU Details and Pricing
+-- 2. Seed Order Prefixes Configuration Table
+INSERT INTO order_prefixes (prefix, label, active) VALUES
+('ORD', 'TikoHub Direct Web Store', true),
+('SH', 'Shopify Secondary Channel', true),
+('TKH', 'TikoHub Mobile / POS', true),
+('MANUAL', 'Tent Walk-Up Direct Entry', true)
+ON CONFLICT (prefix) DO UPDATE SET
+    label = EXCLUDED.label,
+    active = EXCLUDED.active;
+
+-- 3. Seed Catalog with Complete SKU Details and Pricing
 INSERT INTO catalog (sku, category, color, size, price, low_stock_threshold) VALUES
 -- SportPesa Fan Jerseys (KES 2500)
 ('Fan Jersey|White|S', 'Fan Jersey', 'White', 'S', 2500, 10),
@@ -72,7 +82,7 @@ ON CONFLICT (sku) DO UPDATE SET
     price = EXCLUDED.price,
     low_stock_threshold = EXCLUDED.low_stock_threshold;
 
--- 3. Initial Warehouse Stock-In Movements (SportPesa Supplier Deliveries)
+-- 4. Initial Warehouse Stock-In Movements (SportPesa Supplier Deliveries)
 INSERT INTO ledger (type, sku, quantity_delta, location_id, staff_id, amount, notes) VALUES
 ('StockIn', 'Fan Jersey|White|M', 100, 'wh-main', 'Sarah (Warehouse)', 0, 'SportPesa Supplier Initial Stock-In'),
 ('StockIn', 'Fan Jersey|White|L', 120, 'wh-main', 'Sarah (Warehouse)', 0, 'SportPesa Supplier Initial Stock-In'),
@@ -90,8 +100,7 @@ INSERT INTO ledger (type, sku, quantity_delta, location_id, staff_id, amount, no
 ('StockIn', 'Bucket Hat|Black|None', 50, 'wh-main', 'Sarah (Warehouse)', 0, 'Accessories Batch'),
 ('StockIn', 'Bucket Hat|Beige|None', 50, 'wh-main', 'Sarah (Warehouse)', 0, 'Accessories Batch');
 
--- 4. Initial Stock Transfers to SportPesa 7s Tent (Allocated Event Stock)
--- Paired ledger rows: -N at Main Warehouse, +N at SportPesa 7s
+-- 5. Initial Stock Transfers to SportPesa 7s Tent (Allocated Event Stock)
 INSERT INTO ledger (type, sku, quantity_delta, location_id, staff_id, amount, notes) VALUES
 ('Transfer', 'Fan Jersey|White|M', -30, 'wh-main', 'Winston (Admin)', 0, 'Allocated to SportPesa 7s Tent'),
 ('Transfer', 'Fan Jersey|White|M', 30, 'evt-sp7s', 'Winston (Admin)', 0, 'Received from Warehouse Dispatch'),

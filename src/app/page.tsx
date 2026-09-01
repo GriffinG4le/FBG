@@ -3,6 +3,8 @@
 import { useState, useEffect, useTransition, useMemo } from 'react';
 import {
   getLocationsAction,
+  getOrderPrefixesAction,
+  updateOrderPrefixLabelAction,
   getCatalogAction,
   getDerivedStockOnHandAction,
   getOrdersAction,
@@ -17,6 +19,7 @@ import {
 } from './actions';
 import {
   Location,
+  OrderPrefix,
   CatalogItem,
   Order,
   Fulfillment,
@@ -47,6 +50,7 @@ export default function Dashboard() {
 
   // Core Data
   const [locations, setLocations] = useState<Location[]>([]);
+  const [prefixes, setPrefixes] = useState<OrderPrefix[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [fulfillments, setFulfillments] = useState<Fulfillment[]>([]);
@@ -74,6 +78,7 @@ export default function Dashboard() {
   const [swapNotes, setSwapNotes] = useState<string>('');
 
   const [walkUpModalOpen, setWalkUpModalOpen] = useState<boolean>(false);
+  const [walkUpPrefix, setWalkUpPrefix] = useState<string>('MANUAL');
   const [walkUpRef, setWalkUpRef] = useState<string>('');
   const [walkUpOrigSku, setWalkUpOrigSku] = useState<string>('');
   const [walkUpActualSku, setWalkUpActualSku] = useState<string>('');
@@ -98,6 +103,10 @@ export default function Dashboard() {
   // CSV Importer
   const [csvFileName, setCsvFileName] = useState<string>('');
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
+
+  // Prefix Management Editing
+  const [editingPrefix, setEditingPrefix] = useState<string | null>(null);
+  const [editingPrefixLabel, setEditingPrefixLabel] = useState<string>('');
 
   const [isPending, startTransition] = useTransition();
 
@@ -133,8 +142,9 @@ export default function Dashboard() {
 
   const loadAllData = async () => {
     try {
-      const [locs, cats, ords, fuls, leds, stocks] = await Promise.all([
+      const [locs, prefs, cats, ords, fuls, leds, stocks] = await Promise.all([
         getLocationsAction(),
+        getOrderPrefixesAction(),
         getCatalogAction(),
         getOrdersAction(),
         getFulfillmentsAction(),
@@ -143,6 +153,7 @@ export default function Dashboard() {
       ]);
 
       setLocations(locs);
+      setPrefixes(prefs);
       setCatalog(cats);
       setOrders(ords);
       setFulfillments(fuls);
@@ -237,6 +248,7 @@ export default function Dashboard() {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter(o => 
         o.order_ref.toLowerCase().includes(q) ||
+        `${o.source_prefix}-${o.order_ref}`.toLowerCase().includes(q) ||
         o.original_sku.toLowerCase().includes(q) ||
         (o.fulfillment?.actual_sku && o.fulfillment.actual_sku.toLowerCase().includes(q)) ||
         (o.customer_name && o.customer_name.toLowerCase().includes(q)) ||
@@ -246,6 +258,35 @@ export default function Dashboard() {
 
     return list;
   }, [enrichedOrders, statusFilter, searchQuery]);
+
+  // COLLISION DETECTION: Check if search query matches multiple orders with same order_ref across different prefixes
+  const collisionMatches = useMemo(() => {
+    if (!searchQuery || searchQuery.trim().length < 3) return null;
+    const cleanQ = searchQuery.trim().toUpperCase();
+
+    // Group pending orders by order_ref
+    const matchingPending = orders.filter(o => o.status === 'pending' && o.order_ref.toUpperCase().includes(cleanQ));
+    const refGroups = new Map<string, Order[]>();
+
+    for (const ord of matchingPending) {
+      const existing = refGroups.get(ord.order_ref) || [];
+      existing.push(ord);
+      refGroups.set(ord.order_ref, existing);
+    }
+
+    // Find any group with > 1 distinct prefixes
+    for (const [ref, group] of Array.from(refGroups.entries())) {
+      const prefixesInGroup = new Set(group.map(g => g.source_prefix));
+      if (prefixesInGroup.size > 1) {
+        return {
+          collidingRef: ref,
+          orders: group
+        };
+      }
+    }
+
+    return null;
+  }, [searchQuery, orders]);
 
   // Event KPIs (Derived dynamically)
   const eventMetrics = useMemo(() => {
@@ -273,6 +314,7 @@ export default function Dashboard() {
   const handleFulfillExact = async (order: Order) => {
     const payload = {
       orderId: order.id,
+      sourcePrefix: order.source_prefix,
       orderRef: order.order_ref,
       originalSku: order.original_sku,
       actualSku: order.original_sku,
@@ -288,6 +330,7 @@ export default function Dashboard() {
     const optimisticFulfillment: Fulfillment = {
       id: 'temp-ful-' + Date.now(),
       order_id: order.id,
+      source_prefix: order.source_prefix,
       order_ref: order.order_ref,
       original_sku: order.original_sku,
       actual_sku: order.original_sku,
@@ -303,7 +346,6 @@ export default function Dashboard() {
     setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'fulfilled' } : o));
     setFulfillments(prev => [optimisticFulfillment, ...prev]);
 
-    // Decrement stock on hand optimistically
     setStockOnHand(prev => prev.map(s => 
       s.location_id === selectedLocationId && s.sku === order.original_sku
         ? { ...s, stock_on_hand: s.stock_on_hand - 1 }
@@ -344,7 +386,7 @@ export default function Dashboard() {
     return actPrice - origPrice;
   }, [swapOrder, selectedSwapSku, catalog]);
 
-  // Final Cash Collected (Override if provided, else auto delta)
+  // Final Cash Collected
   const finalCashCollected = useMemo(() => {
     if (swapCashOverride.trim() !== '') {
       const parsed = parseFloat(swapCashOverride);
@@ -359,6 +401,7 @@ export default function Dashboard() {
 
     const payload = {
       orderId: swapOrder.id,
+      sourcePrefix: swapOrder.source_prefix,
       orderRef: swapOrder.order_ref,
       originalSku: swapOrder.original_sku,
       actualSku: selectedSwapSku,
@@ -370,10 +413,10 @@ export default function Dashboard() {
       notes: `Swapped to ${selectedSwapSku}. ${swapNotes}`
     };
 
-    // Optimistic UI update
     const optimisticFulfillment: Fulfillment = {
       id: 'temp-ful-' + Date.now(),
       order_id: swapOrder.id,
+      source_prefix: swapOrder.source_prefix,
       order_ref: swapOrder.order_ref,
       original_sku: swapOrder.original_sku,
       actual_sku: selectedSwapSku,
@@ -389,7 +432,6 @@ export default function Dashboard() {
     setOrders(prev => prev.map(o => o.id === swapOrder.id ? { ...o, status: 'fulfilled' } : o));
     setFulfillments(prev => [optimisticFulfillment, ...prev]);
 
-    // Adjust local stock
     setStockOnHand(prev => prev.map(s => {
       if (s.location_id === selectedLocationId && s.sku === selectedSwapSku) {
         return { ...s, stock_on_hand: s.stock_on_hand - 1 };
@@ -418,6 +460,7 @@ export default function Dashboard() {
   // Open Walk-Up Modal
   const openWalkUpModal = () => {
     setWalkUpRef('');
+    setWalkUpPrefix('MANUAL');
     if (catalog.length > 0) {
       setWalkUpOrigSku(catalog[0].sku);
       setWalkUpActualSku(catalog[0].sku);
@@ -431,20 +474,17 @@ export default function Dashboard() {
     setWalkUpModalOpen(true);
   };
 
-  // Handle Walk-Up Original SKU change (updates default paid & actual SKU)
   const handleWalkUpOrigSkuChange = (sku: string) => {
     setWalkUpOrigSku(sku);
     const cat = catalog.find(c => c.sku === sku);
     if (cat) {
       setWalkUpPaid(cat.price.toString());
     }
-    // Update cash delta if actual SKU differs
     const origPrice = cat?.price || 0;
     const actPrice = catalog.find(c => c.sku === walkUpActualSku)?.price || 0;
     setWalkUpCashDelta((actPrice - origPrice).toString());
   };
 
-  // Handle Walk-Up Actual SKU change
   const handleWalkUpActualSkuChange = (sku: string) => {
     setWalkUpActualSku(sku);
     const origPrice = catalog.find(c => c.sku === walkUpOrigSku)?.price || 0;
@@ -452,7 +492,6 @@ export default function Dashboard() {
     setWalkUpCashDelta((actPrice - origPrice).toString());
   };
 
-  // Submit Walk-Up Direct Entry & Fulfillment
   const handleWalkUpSubmit = async () => {
     if (!walkUpRef.trim()) {
       alert("Please enter a truncated Order ID (e.g. 04CA7).");
@@ -460,6 +499,7 @@ export default function Dashboard() {
     }
 
     const payload = {
+      sourcePrefix: walkUpPrefix || 'MANUAL',
       orderRef: walkUpRef.trim().toUpperCase(),
       originalSku: walkUpOrigSku,
       actualSku: walkUpActualSku,
@@ -474,9 +514,9 @@ export default function Dashboard() {
       notes: walkUpNotes.trim() || 'Tent Walk-Up Entry'
     };
 
-    // Optimistic UI updates
     const mockOrder: Order = {
       id: 'temp-ord-' + Date.now(),
+      source_prefix: payload.sourcePrefix,
       order_ref: payload.orderRef,
       original_sku: payload.originalSku,
       amount_paid: payload.amountPaid,
@@ -490,6 +530,7 @@ export default function Dashboard() {
     const mockFulfillment: Fulfillment = {
       id: 'temp-ful-' + Date.now(),
       order_id: mockOrder.id,
+      source_prefix: payload.sourcePrefix,
       order_ref: payload.orderRef,
       original_sku: payload.originalSku,
       actual_sku: payload.actualSku,
@@ -505,7 +546,6 @@ export default function Dashboard() {
     setOrders(prev => [mockOrder, ...prev]);
     setFulfillments(prev => [mockFulfillment, ...prev]);
 
-    // Decrement actual SKU stock locally
     setStockOnHand(prev => prev.map(s => 
       s.location_id === selectedLocationId && s.sku === payload.actualSku
         ? { ...s, stock_on_hand: s.stock_on_hand - 1 }
@@ -591,7 +631,11 @@ export default function Dashboard() {
     startTransition(async () => {
       try {
         const res = await importTikoHubOrdersAction(parseResult.orders, currentStaff.name);
-        alert(`Import Complete!\n\nSuccessfully created: ${res.inserted} orders.\nIgnored duplicates: ${res.duplicates} rows.`);
+        const prefixMsg = res.prefixesCreated.length > 0 
+          ? `\nRegistered ${res.prefixesCreated.length} new source prefix(es): ${res.prefixesCreated.join(', ')}`
+          : '';
+
+        alert(`Import Complete!\n\nSuccessfully created: ${res.inserted} orders.\nIgnored duplicates: ${res.duplicates} rows.${prefixMsg}`);
         setCsvFileName('');
         setParseResult(null);
         loadAllData();
@@ -602,9 +646,20 @@ export default function Dashboard() {
     });
   };
 
+  // Save Prefix Label Edit
+  const handleSavePrefixLabel = async (prefix: string) => {
+    try {
+      await updateOrderPrefixLabelAction(prefix, editingPrefixLabel);
+      setPrefixes(prev => prev.map(p => p.prefix === prefix ? { ...p, label: editingPrefixLabel } : p));
+      setEditingPrefix(null);
+    } catch (err) {
+      alert("Failed to update prefix label.");
+    }
+  };
+
   // Database Reset
   const handleDbReset = async () => {
-    if (confirm("WARNING: This will reset all orders, fulfillments, and stock ledger to clean standard seeds. Proceed?")) {
+    if (confirm("WARNING: This will reset all orders, fulfillments, prefixes, and stock ledger to clean standard seeds. Proceed?")) {
       try {
         await resetDatabaseAction();
         clearOfflineQueue();
@@ -643,6 +698,13 @@ export default function Dashboard() {
       ...stats
     }));
   }, [enrichedOrders]);
+
+  // Helper to render prefix tag CSS class
+  const getPrefixClass = (p: string) => {
+    const clean = p.toLowerCase();
+    if (['ord', 'sh', 'tkh', 'manual'].includes(clean)) return clean;
+    return 'custom';
+  };
 
   return (
     <main className="app-wrapper">
@@ -794,7 +856,7 @@ export default function Dashboard() {
               <span className="search-icon">🔍</span>
               <input
                 type="text"
-                placeholder="Search truncated ID (e.g. 04CA7, JW6FU), SKU, customer..."
+                placeholder="Type 5-char code (e.g. 04CA7, JW6FU), SKU, customer..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -822,6 +884,67 @@ export default function Dashboard() {
             </button>
           </div>
 
+          {/* COLLISION DISAMBIGUATION CARD (Surfaced ONLY when genuine truncated ID conflict exists) */}
+          {collisionMatches && (
+            <div className="collision-disambiguation-box">
+              <div className="collision-header">
+                <span style={{ fontSize: '18px' }}>⚡</span>
+                <div>
+                  <div className="collision-title">
+                    Truncated Reference Collision: #{collisionMatches.collidingRef}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    Multiple orders share this 5-character code across different sources. Please select the matching customer:
+                  </div>
+                </div>
+              </div>
+
+              <div className="collision-grid">
+                {collisionMatches.orders.map(cOrder => (
+                  <div key={cOrder.id} className="collision-candidate-card">
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <span className={`prefix-tag ${getPrefixClass(cOrder.source_prefix)}`}>
+                          {cOrder.source_prefix}-{cOrder.order_ref}
+                        </span>
+                        <span style={{ fontWeight: 700, color: 'var(--accent)', fontSize: '13px' }}>
+                          {cOrder.amount_paid} KES
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        👤 {cOrder.customer_name || 'Anonymous Customer'}
+                      </div>
+                      {cOrder.customer_phone && (
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          📞 {cOrder.customer_phone}
+                        </div>
+                      )}
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        👕 {cOrder.original_sku}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={() => handleFulfillExact(cOrder)}
+                        className="btn btn-success btn-sm"
+                        style={{ flex: 1 }}
+                      >
+                        ✓ Fulfill This Order
+                      </button>
+                      <button
+                        onClick={() => openSwapModal(cOrder)}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        ⇄ Swap
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Orders Results List */}
           <div className="orders-list">
             {filteredOrders.length === 0 ? (
@@ -841,7 +964,11 @@ export default function Dashboard() {
                   <div key={order.id} className={`order-card ${isFulfilled ? 'fulfilled' : ''}`}>
                     <div className="order-header">
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
+                          {order.source_prefix}
+                        </span>
                         <span className="order-ref">#{order.order_ref}</span>
+
                         {isFulfilled ? (
                           isSwap ? (
                             <span className="badge badge-swap">Swapped & Dispatched ✓</span>
@@ -999,7 +1126,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Warehouse Stock Operations Grid (Only for Admin / Warehouse Roles) */}
+          {/* Warehouse Stock Operations Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '16px' }}>
             {/* 1. Log Warehouse Stock-In */}
             <div className="content-card">
@@ -1007,7 +1134,7 @@ export default function Dashboard() {
                 <h3 className="section-title">📥 1. Warehouse Stock-In</h3>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                Log incoming merchandise from suppliers (e.g. SportPesa deliveries) into Main Warehouse stock.
+                Log incoming merchandise from suppliers into Main Warehouse stock.
               </p>
               <form onSubmit={handleStockInSubmit}>
                 <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -1058,7 +1185,7 @@ export default function Dashboard() {
                 <h3 className="section-title">🚚 2. Stock Transfer to Event Tent</h3>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                Allocate merchandise from Main Warehouse to a specific Event tent with paired immutable ledger rows.
+                Allocate merchandise from Main Warehouse to a specific Event tent.
               </p>
               <form onSubmit={handleTransferSubmit}>
                 <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -1130,11 +1257,11 @@ export default function Dashboard() {
             <h2 className="section-title">📥 Ingest TikoHub Shop Orders</h2>
           </div>
           <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Upload the manual CSV export from TikoHub. The system automatically extracts truncated order IDs (e.g. <code>ORD-04CA76BD</code> &rarr; <code>04CA7</code>), expands multi-unit orders into individual units, and prevents duplicate imports safely.
+            Upload the CSV export from TikoHub / Shopify. The system dynamically splits on the first <code>-</code> to capture any <code>source_prefix</code> (e.g. <code>ORD</code>, <code>SH</code>, <code>TKH</code>), truncates the ID to 5 characters, expands multi-unit rows, and automatically registers new prefix configs.
           </p>
 
           <div className="form-group" style={{ marginBottom: '16px' }}>
-            <label htmlFor="csv-file-input">Select TikoHub CSV Export File</label>
+            <label htmlFor="csv-file-input">Select CSV Export File</label>
             <input
               id="csv-file-input"
               type="file"
@@ -1154,6 +1281,12 @@ export default function Dashboard() {
                 <div className="stat-card">
                   <span className="stat-title">Expanded Units</span>
                   <span className="stat-val" style={{ color: 'var(--accent)' }}>{parseResult.totalUnits}</span>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-title">Discovered Prefixes</span>
+                  <span className="stat-val" style={{ color: '#a78bfa' }}>
+                    {parseResult.discoveredPrefixes.join(', ') || 'ORD'}
+                  </span>
                 </div>
               </div>
 
@@ -1178,6 +1311,7 @@ export default function Dashboard() {
                   <table className="data-table">
                     <thead>
                       <tr>
+                        <th>Prefix</th>
                         <th>Truncated Ref</th>
                         <th>Original SKU</th>
                         <th>Amount Paid</th>
@@ -1188,6 +1322,11 @@ export default function Dashboard() {
                     <tbody>
                       {parseResult.orders.slice(0, 5).map((o, idx) => (
                         <tr key={idx}>
+                          <td>
+                            <span className={`prefix-tag ${getPrefixClass(o.source_prefix)}`}>
+                              {o.source_prefix}
+                            </span>
+                          </td>
                           <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
                             #{o.order_ref}
                           </td>
@@ -1259,13 +1398,13 @@ export default function Dashboard() {
               <h2 className="section-title">🎯 Ordered vs. What Went Out (Audit Matrix)</h2>
             </div>
             <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-              One-click reconciliation audit comparing what customers originally paid for on TikoHub vs the actual SKU physically handed over at the tent.
+              One-click reconciliation audit comparing what customers originally paid for vs what was physically handed over.
             </p>
             <div className="table-responsive">
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Order Ref</th>
+                    <th>Source & Ref</th>
                     <th>Customer</th>
                     <th>Original SKU Ordered</th>
                     <th>Actual SKU Handed Over</th>
@@ -1282,8 +1421,13 @@ export default function Dashboard() {
 
                     return (
                       <tr key={order.id}>
-                        <td style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
-                          #{order.order_ref}
+                        <td>
+                          <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
+                            {order.source_prefix}
+                          </span>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)', marginLeft: '6px' }}>
+                            #{order.order_ref}
+                          </span>
                         </td>
                         <td>{order.customer_name || 'Walk-up'}</td>
                         <td>{order.original_sku}</td>
@@ -1305,6 +1449,74 @@ export default function Dashboard() {
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Dynamic Order Prefixes Config Table */}
+          <div className="content-card">
+            <div className="section-header">
+              <h2 className="section-title">⚙️ Dynamic Order Prefixes (Config Table)</h2>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+              Prefixes are discovered automatically at ingest. Admins can annotate labels for reporting context.
+            </p>
+            <div className="table-responsive">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Prefix Code</th>
+                    <th>Descriptive Label</th>
+                    <th>Active</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {prefixes.map(p => (
+                    <tr key={p.prefix}>
+                      <td>
+                        <span className={`prefix-tag ${getPrefixClass(p.prefix)}`}>
+                          {p.prefix}
+                        </span>
+                      </td>
+                      <td>
+                        {editingPrefix === p.prefix ? (
+                          <input
+                            type="text"
+                            value={editingPrefixLabel}
+                            onChange={(e) => setEditingPrefixLabel(e.target.value)}
+                            style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}
+                          />
+                        ) : (
+                          p.label || <span style={{ color: 'var(--text-muted)' }}>No description</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className="stock-pill healthy">Active</span>
+                      </td>
+                      <td>
+                        {editingPrefix === p.prefix ? (
+                          <button
+                            onClick={() => handleSavePrefixLabel(p.prefix)}
+                            className="btn btn-success btn-sm"
+                          >
+                            Save
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setEditingPrefix(p.prefix);
+                              setEditingPrefixLabel(p.label);
+                            }}
+                            className="btn btn-secondary btn-sm"
+                          >
+                            Edit Label
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1383,8 +1595,13 @@ export default function Dashboard() {
 
             <div className="form-group" style={{ marginBottom: '10px' }}>
               <label>Order Reference</label>
-              <div style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: 700, color: 'var(--accent)' }}>
-                #{swapOrder.order_ref}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className={`prefix-tag ${getPrefixClass(swapOrder.source_prefix)}`}>
+                  {swapOrder.source_prefix}
+                </span>
+                <span style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: 700, color: 'var(--accent)' }}>
+                  #{swapOrder.order_ref}
+                </span>
               </div>
             </div>
 
@@ -1483,19 +1700,33 @@ export default function Dashboard() {
             </div>
 
             <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-              Log an untracked customer directly at the tent. Collapses paper tracking into 1 step.
+              Log an untracked customer directly at the tent in 1 touch.
             </p>
 
-            <div className="form-group" style={{ marginBottom: '10px' }}>
-              <label>Truncated Order Reference (5-char format)</label>
-              <input
-                type="text"
-                placeholder="e.g. 04CA7, JW6FU, 9B3D1"
-                value={walkUpRef}
-                onChange={(e) => setWalkUpRef(e.target.value.toUpperCase())}
-                autoFocus
-                required
-              />
+            <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '10px', marginBottom: '10px' }}>
+              <div className="form-group">
+                <label>Source Prefix</label>
+                <select
+                  value={walkUpPrefix}
+                  onChange={(e) => setWalkUpPrefix(e.target.value)}
+                >
+                  {prefixes.map(p => (
+                    <option key={p.prefix} value={p.prefix}>{p.prefix}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Truncated Ref (5 chars)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 04CA7, JW6FU, 9B3D1"
+                  value={walkUpRef}
+                  onChange={(e) => setWalkUpRef(e.target.value.toUpperCase())}
+                  autoFocus
+                  required
+                />
+              </div>
             </div>
 
             <div className="form-group" style={{ marginBottom: '10px' }}>

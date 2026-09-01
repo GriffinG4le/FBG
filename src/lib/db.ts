@@ -13,6 +13,13 @@ export interface Location {
   created_at: string;
 }
 
+export interface OrderPrefix {
+  prefix: string;
+  label: string;
+  active: boolean;
+  created_at: string;
+}
+
 export interface CatalogItem {
   sku: string;
   category: string;
@@ -24,7 +31,8 @@ export interface CatalogItem {
 
 export interface Order {
   id: string;
-  order_ref: string; // Truncated order ID (e.g. 04CA7, JW6FU)
+  source_prefix: string; // e.g. ORD, SH, TKH, MANUAL
+  order_ref: string;     // Truncated order ID (e.g. 04CA7, JW6FU)
   original_sku: string;
   amount_paid: number;
   customer_name?: string | null;
@@ -37,6 +45,7 @@ export interface Order {
 export interface Fulfillment {
   id: string;
   order_id: string;
+  source_prefix: string;
   order_ref: string;
   original_sku: string;
   actual_sku: string;
@@ -80,7 +89,7 @@ export interface StaffProfile {
   id: string;
   name: string;
   role: 'admin' | 'warehouse' | 'event_staff';
-  assigned_location_ids: string[]; // ['*'] for admin or specific location ids
+  assigned_location_ids: string[];
 }
 
 // Initial Standard Mock State for Fallback / Seeding
@@ -88,6 +97,13 @@ const INITIAL_LOCATIONS: Location[] = [
   { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() },
   { id: 'evt-sp7s', name: 'SportPesa 7s (RFUEA Ground)', type: 'event', status: 'active', created_at: new Date().toISOString() },
   { id: 'evt-driftwood', name: 'Driftwood 7s (Mombasa MSC)', type: 'event', status: 'active', created_at: new Date().toISOString() }
+];
+
+const INITIAL_PREFIXES: OrderPrefix[] = [
+  { prefix: 'ORD', label: 'TikoHub Direct Web Store', active: true, created_at: new Date().toISOString() },
+  { prefix: 'SH', label: 'Shopify Secondary Channel', active: true, created_at: new Date().toISOString() },
+  { prefix: 'TKH', label: 'TikoHub Mobile / POS', active: true, created_at: new Date().toISOString() },
+  { prefix: 'MANUAL', 'label': 'Tent Walk-Up Direct Entry', active: true, created_at: new Date().toISOString() }
 ];
 
 const INITIAL_CATALOG: CatalogItem[] = [
@@ -141,7 +157,7 @@ const INITIAL_LEDGER: LedgerRow[] = [
   { id: 'led-3', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|L', quantity_delta: 100, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'SportPesa Supplier Stock-In' },
   { id: 'led-4', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|L', quantity_delta: 80, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Supplier Batch Intake' },
   { id: 'led-5', timestamp: new Date(Date.now() - 86400000 * 2).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|L', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Official KRU Batch' },
-  
+
   // Stock allocation from WH to SportPesa 7s Tent
   { id: 'led-6', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|M', quantity_delta: -30, location_id: 'wh-main', staff_id: 'Winston (Admin)', amount: 0, notes: 'Allocated to SportPesa 7s Tent' },
   { id: 'led-7', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Transfer', sku: 'Fan Jersey|White|M', quantity_delta: 30, location_id: 'evt-sp7s', staff_id: 'Winston (Admin)', amount: 0, notes: 'Received from Warehouse Dispatch' },
@@ -152,13 +168,14 @@ const INITIAL_LEDGER: LedgerRow[] = [
 ];
 
 const INITIAL_ORDERS: Order[] = [
-  { id: 'ord-01', order_ref: '04CA7', original_sku: 'Fan Jersey|White|M', amount_paid: 2500, customer_name: 'Kevin Omondi', customer_phone: '0712345678', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 5).toISOString() },
-  { id: 'ord-02', order_ref: 'JW6FU', original_sku: 'Crew Neck|Navy|L', amount_paid: 2250, customer_name: 'Brian Kiprop', customer_phone: '0723456789', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 4).toISOString() },
-  { id: 'ord-03', order_ref: '9B3D1', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Faith Mutua', customer_phone: '0734567890', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 3).toISOString() }
+  { id: 'ord-01', source_prefix: 'ORD', order_ref: '04CA7', original_sku: 'Fan Jersey|White|M', amount_paid: 2500, customer_name: 'Kevin Omondi', customer_phone: '0712345678', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 5).toISOString() },
+  { id: 'ord-02', source_prefix: 'SH',  order_ref: 'JW6FU', original_sku: 'Crew Neck|Navy|L', amount_paid: 2250, customer_name: 'Brian Kiprop', customer_phone: '0723456789', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 4).toISOString() },
+  { id: 'ord-03', source_prefix: 'ORD', order_ref: '9B3D1', original_sku: 'Fan Jersey|White|L', amount_paid: 2500, customer_name: 'Faith Mutua', customer_phone: '0734567890', channel: 'Online', status: 'pending', created_at: new Date(Date.now() - 3600000 * 3).toISOString() }
 ];
 
 // In-memory persistent fallback state when running locally / disconnected
 let memoryLocations = [...INITIAL_LOCATIONS];
+let memoryPrefixes = [...INITIAL_PREFIXES];
 let memoryCatalog = [...INITIAL_CATALOG];
 let memoryOrders = [...INITIAL_ORDERS];
 let memoryFulfillments: Fulfillment[] = [];
@@ -183,7 +200,6 @@ async function ensureSkuExists(sku: string, price: number = 0) {
       });
     }
   } catch {
-    // If Supabase not connected, add to memory catalog
     if (!memoryCatalog.some(c => c.sku === sku)) {
       const parts = sku.split('|');
       memoryCatalog.push({
@@ -196,6 +212,32 @@ async function ensureSkuExists(sku: string, price: number = 0) {
       });
     }
   }
+}
+
+// ==============================================================================
+// Order Prefixes API (Config, not Code)
+// ==============================================================================
+
+export async function getOrderPrefixes(): Promise<OrderPrefix[]> {
+  try {
+    const { data, error } = await supabase.from('order_prefixes').select('*').order('prefix', { ascending: true });
+    if (!error && data && data.length > 0) {
+      return data;
+    }
+  } catch (e) {
+    console.warn("Supabase fetch failed for order_prefixes, using memory cache:", e);
+  }
+  return memoryPrefixes;
+}
+
+export async function updateOrderPrefixLabel(prefix: string, label: string): Promise<void> {
+  try {
+    await supabase.from('order_prefixes').update({ label }).eq('prefix', prefix);
+  } catch (e) {
+    console.warn("Supabase prefix update failed, updating memory store:", e);
+  }
+  const item = memoryPrefixes.find(p => p.prefix === prefix);
+  if (item) item.label = label;
 }
 
 // ==============================================================================
@@ -231,7 +273,7 @@ export async function getCatalog(): Promise<CatalogItem[]> {
 }
 
 // ==============================================================================
-// Derived Stock on Hand (The Non-Negotiable Append-Only Ledger Principle)
+// Derived Stock on Hand
 // ==============================================================================
 
 export async function getDerivedStockOnHand(locationId?: string): Promise<StockOnHandItem[]> {
@@ -241,7 +283,7 @@ export async function getDerivedStockOnHand(locationId?: string): Promise<StockO
     getLedger()
   ]);
 
-  const targetLocations = locationId 
+  const targetLocations = locationId
     ? locations.filter(l => l.id === locationId)
     : locations;
 
@@ -249,7 +291,6 @@ export async function getDerivedStockOnHand(locationId?: string): Promise<StockO
 
   for (const loc of targetLocations) {
     for (const cat of catalog) {
-      // Derive stock dynamically: sum(quantity_delta) for this location and SKU
       const movements = ledger.filter(r => r.location_id === loc.id && r.sku === cat.sku);
       const stockOnHand = movements.reduce((sum, r) => sum + Number(r.quantity_delta || 0), 0);
 
@@ -290,8 +331,9 @@ export async function getOrders(search?: string): Promise<Order[]> {
 
   if (search && search.trim().length > 0) {
     const q = search.trim().toLowerCase();
-    return orders.filter(o => 
+    return orders.filter(o =>
       o.order_ref.toLowerCase().includes(q) ||
+      `${o.source_prefix}-${o.order_ref}`.toLowerCase().includes(q) ||
       o.original_sku.toLowerCase().includes(q) ||
       (o.customer_name && o.customer_name.toLowerCase().includes(q)) ||
       (o.customer_phone && o.customer_phone.toLowerCase().includes(q))
@@ -360,10 +402,6 @@ export async function getLedger(locationId?: string, type?: string): Promise<Led
 // Operational Mutation Functions
 // ==============================================================================
 
-/**
- * 1. Warehouse Stock-In
- * Adds merchandise directly from supplier to warehouse stock.
- */
 export async function logWarehouseStockIn(
   sku: string,
   quantity: number,
@@ -403,10 +441,6 @@ export async function logWarehouseStockIn(
   return created;
 }
 
-/**
- * 2. Stock Allocation / Transfer (Warehouse to Event Tent)
- * Writes paired immutable ledger entries (-N at source, +N at destination)
- */
 export async function allocateStockTransfer(
   sku: string,
   quantity: number,
@@ -422,7 +456,6 @@ export async function allocateStockTransfer(
 
   const transferNote = notes || `Stock transfer from ${fromLocationId} to ${toLocationId}`;
 
-  // 1. Source row (-N)
   const sourcePayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
     type: 'Transfer',
     sku,
@@ -433,7 +466,6 @@ export async function allocateStockTransfer(
     notes: transferNote
   };
 
-  // 2. Dest row (+N)
   const destPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
     type: 'Transfer',
     sku,
@@ -471,12 +503,9 @@ export async function allocateStockTransfer(
   return { sourceRow: sRow, destRow: dRow };
 }
 
-/**
- * 3. Fulfillment & Dispatch/Swap Workflow (Tent One-Touch Entry)
- * Resolves an order into a single fulfillment and writes an immutable ledger dispatch/swap row.
- */
 export async function fulfillOrder(params: {
   orderId: string;
+  sourcePrefix?: string;
   orderRef: string;
   originalSku: string;
   actualSku: string;
@@ -489,6 +518,7 @@ export async function fulfillOrder(params: {
 }): Promise<{ fulfillment: Fulfillment; ledgerRow: LedgerRow }> {
   const {
     orderId,
+    sourcePrefix = 'ORD',
     orderRef,
     originalSku,
     actualSku,
@@ -505,9 +535,9 @@ export async function fulfillOrder(params: {
   const isSwap = originalSku !== actualSku;
   const eventType: 'Dispatch' | 'Swap' = isSwap ? 'Swap' : 'Dispatch';
 
-  // 1. Create fulfillment record
   const fulfillmentPayload = {
     order_id: orderId,
+    source_prefix: sourcePrefix,
     order_ref: orderRef,
     original_sku: originalSku,
     actual_sku: actualSku,
@@ -530,18 +560,16 @@ export async function fulfillOrder(params: {
 
     if (!fulErr && fulData) {
       createdFulfillment = fulData;
-      // Mark order fulfilled
       await supabase.from('orders').update({ status: 'fulfilled' }).eq('id', orderId);
     } else {
       throw new Error(fulErr?.message || 'Fulfillment insert failed');
     }
-  } catch (e) {
+  } catch {
     createdFulfillment = {
       ...fulfillmentPayload,
       id: 'ful-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
       fulfilled_at: new Date().toISOString()
     };
-    // Update memory order
     const ordIndex = memoryOrders.findIndex(o => o.id === orderId);
     if (ordIndex !== -1) {
       memoryOrders[ordIndex].status = 'fulfilled';
@@ -550,7 +578,6 @@ export async function fulfillOrder(params: {
 
   memoryFulfillments.unshift(createdFulfillment);
 
-  // 2. Create ledger row: -1 unit of actualSku at locationId
   const ledgerPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
     type: eventType,
     sku: actualSku,
@@ -560,7 +587,7 @@ export async function fulfillOrder(params: {
     order_id: orderId,
     fulfillment_id: createdFulfillment.id,
     amount: cashCollected,
-    notes: isSwap 
+    notes: isSwap
       ? `Swapped from ${originalSku} to ${actualSku}${overrideReason ? ` (${overrideReason})` : ''}`
       : 'Standard order dispatch'
   };
@@ -595,12 +622,8 @@ export async function fulfillOrder(params: {
   };
 }
 
-/**
- * 4. Quick Walk-Up Direct Entry & Fulfillment
- * For customers arriving at tent with a manual/paper receipt or unimported order.
- * Creates Order + Fulfillment + Ledger in one touch!
- */
 export async function quickWalkUpFulfill(params: {
+  sourcePrefix?: string;
   orderRef: string;
   originalSku: string;
   actualSku: string;
@@ -617,8 +640,10 @@ export async function quickWalkUpFulfill(params: {
   await ensureSkuExists(params.originalSku);
   await ensureSkuExists(params.actualSku);
 
-  // 1. Create order
+  const sourcePrefix = params.sourcePrefix || 'MANUAL';
+
   const orderPayload = {
+    source_prefix: sourcePrefix,
     order_ref: params.orderRef.toUpperCase(),
     original_sku: params.originalSku,
     amount_paid: params.amountPaid,
@@ -647,15 +672,14 @@ export async function quickWalkUpFulfill(params: {
 
   memoryOrders.unshift(createdOrder);
 
-  // Compute price delta
   const catalog = await getCatalog();
   const origPrice = catalog.find(c => c.sku === params.originalSku)?.price || 0;
   const actPrice = catalog.find(c => c.sku === params.actualSku)?.price || 0;
   const priceDelta = actPrice - origPrice;
 
-  // 2. Fulfill
   const { fulfillment, ledgerRow } = await fulfillOrder({
     orderId: createdOrder.id,
+    sourcePrefix: createdOrder.source_prefix,
     orderRef: createdOrder.order_ref,
     originalSku: params.originalSku,
     actualSku: params.actualSku,
@@ -674,26 +698,49 @@ export async function quickWalkUpFulfill(params: {
   };
 }
 
-/**
- * 5. Ingest TikoHub Orders (Batch CSV Import)
- */
 export async function importTikoHubOrders(
   rawOrders: RawParsedOrder[],
   staffId: string = 'Operator'
-): Promise<{ inserted: number; duplicates: number }> {
-  if (rawOrders.length === 0) return { inserted: 0, duplicates: 0 };
+): Promise<{ inserted: number; duplicates: number; prefixesCreated: string[] }> {
+  if (rawOrders.length === 0) return { inserted: 0, duplicates: 0, prefixesCreated: [] };
 
-  // Ensure all SKUs exist in catalog
+  // 1. Ensure SKUs exist in catalog
   for (const o of rawOrders) {
     await ensureSkuExists(o.original_sku, o.amount_paid);
   }
 
-  // Fetch existing orders to deduplicate by order_ref and original_sku
+  // 2. Discover and automatically upsert prefixes into order_prefixes config table
+  const uniquePrefixes = Array.from(new Set(rawOrders.map(r => r.source_prefix)));
+  const existingPrefixes = await getOrderPrefixes();
+  const existingPrefixSet = new Set(existingPrefixes.map(p => p.prefix));
+  const newPrefixes: string[] = [];
+
+  for (const prefix of uniquePrefixes) {
+    if (!existingPrefixSet.has(prefix)) {
+      newPrefixes.push(prefix);
+      const newPrefixRow = {
+        prefix,
+        label: `Auto-ingested ${prefix} orders`,
+        active: true,
+        created_at: new Date().toISOString()
+      };
+      try {
+        await supabase.from('order_prefixes').insert({
+          prefix,
+          label: newPrefixRow.label,
+          active: true
+        });
+      } catch {}
+      memoryPrefixes.push(newPrefixRow);
+    }
+  }
+
+  // 3. Fetch existing orders to deduplicate by (source_prefix, order_ref, original_sku)
   const existingOrders = await getOrders();
   const existingRefMap = new Map<string, number>();
 
   for (const eo of existingOrders) {
-    const key = `${eo.order_ref}||${eo.original_sku}`;
+    const key = `${eo.source_prefix}||${eo.order_ref}||${eo.original_sku}`;
     existingRefMap.set(key, (existingRefMap.get(key) || 0) + 1);
   }
 
@@ -702,18 +749,19 @@ export async function importTikoHubOrders(
   let duplicates = 0;
 
   for (const ro of rawOrders) {
-    const key = `${ro.order_ref}||${ro.original_sku}`;
+    const key = `${ro.source_prefix}||${ro.order_ref}||${ro.original_sku}`;
     const existingCount = existingRefMap.get(key) || 0;
     const decidedCount = incomingDecidedMap.get(key) || 0;
 
     const totalBatchCount = rawOrders.filter(
-      r => r.order_ref === ro.order_ref && r.original_sku === ro.original_sku
+      r => r.source_prefix === ro.source_prefix && r.order_ref === ro.order_ref && r.original_sku === ro.original_sku
     ).length;
 
     if (existingCount + decidedCount >= totalBatchCount) {
       duplicates++;
     } else {
       toInsert.push({
+        source_prefix: ro.source_prefix,
         order_ref: ro.order_ref,
         original_sku: ro.original_sku,
         amount_paid: ro.amount_paid,
@@ -747,22 +795,22 @@ export async function importTikoHubOrders(
 
   return {
     inserted: toInsert.length,
-    duplicates
+    duplicates,
+    prefixesCreated: newPrefixes
   };
 }
 
-/**
- * 6. Reset Database to Clean Initial Seed State
- */
 export async function resetDatabase(): Promise<void> {
   try {
     await supabase.from('fulfillments').delete().neq('order_ref', 'never_match_xyz');
     await supabase.from('ledger').delete().neq('staff_id', 'never_match_xyz');
     await supabase.from('orders').delete().neq('order_ref', 'never_match_xyz');
+    await supabase.from('order_prefixes').delete().neq('prefix', 'never_match_xyz');
     await supabase.from('catalog').delete().neq('sku', 'never_match_xyz');
     await supabase.from('locations').delete().neq('id', 'never_match_xyz');
 
     await supabase.from('locations').insert(INITIAL_LOCATIONS);
+    await supabase.from('order_prefixes').insert(INITIAL_PREFIXES);
     await supabase.from('catalog').insert(INITIAL_CATALOG);
     await supabase.from('ledger').insert(INITIAL_LEDGER);
     await supabase.from('orders').insert(INITIAL_ORDERS);
@@ -771,6 +819,7 @@ export async function resetDatabase(): Promise<void> {
   }
 
   memoryLocations = [...INITIAL_LOCATIONS];
+  memoryPrefixes = [...INITIAL_PREFIXES];
   memoryCatalog = [...INITIAL_CATALOG];
   memoryOrders = [...INITIAL_ORDERS];
   memoryFulfillments = [];

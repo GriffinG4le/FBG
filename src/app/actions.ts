@@ -8,6 +8,8 @@ import {
   getOrders,
   getFulfillments,
   getLedger,
+  getOrderPrefixes,
+  updateOrderPrefixLabel,
   logWarehouseStockIn,
   allocateStockTransfer,
   fulfillOrder,
@@ -19,7 +21,8 @@ import {
   Order,
   Fulfillment,
   LedgerRow,
-  StockOnHandItem
+  StockOnHandItem,
+  OrderPrefix
 } from '../lib/db';
 import { RawParsedOrder } from '../lib/csvParser';
 
@@ -29,6 +32,24 @@ export async function getLocationsAction(): Promise<Location[]> {
   } catch (error) {
     console.error("Failed to get locations:", error);
     throw new Error("Failed to load locations.");
+  }
+}
+
+export async function getOrderPrefixesAction(): Promise<OrderPrefix[]> {
+  try {
+    return await getOrderPrefixes();
+  } catch (error) {
+    console.error("Failed to get order prefixes:", error);
+    throw new Error("Failed to load order prefixes.");
+  }
+}
+
+export async function updateOrderPrefixLabelAction(prefix: string, label: string): Promise<void> {
+  try {
+    await updateOrderPrefixLabel(prefix, label);
+  } catch (error) {
+    console.error("Failed to update prefix label:", error);
+    throw new Error("Failed to update prefix label.");
   }
 }
 
@@ -110,6 +131,7 @@ export async function allocateStockTransferAction(
 
 export async function fulfillOrderAction(params: {
   orderId: string;
+  sourcePrefix?: string;
   orderRef: string;
   originalSku: string;
   actualSku: string;
@@ -129,6 +151,7 @@ export async function fulfillOrderAction(params: {
 }
 
 export async function quickWalkUpFulfillAction(params: {
+  sourcePrefix?: string;
   orderRef: string;
   originalSku: string;
   actualSku: string;
@@ -153,7 +176,7 @@ export async function quickWalkUpFulfillAction(params: {
 export async function importTikoHubOrdersAction(
   rawOrders: RawParsedOrder[],
   staffId?: string
-): Promise<{ inserted: number; duplicates: number }> {
+): Promise<{ inserted: number; duplicates: number; prefixesCreated: string[] }> {
   try {
     return await importTikoHubOrders(rawOrders, staffId);
   } catch (error) {

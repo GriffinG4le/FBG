@@ -1,8 +1,9 @@
 // ==============================================================================
-// TikoHub CSV Parser with Automatic Truncated Order ID Extraction
+// TikoHub CSV Parser with Automatic Dynamic Prefix & Truncated ID Extraction
 // ==============================================================================
 
 export interface RawParsedOrder {
+  source_prefix: string;
   order_ref: string;
   original_sku: string;
   amount_paid: number;
@@ -15,37 +16,45 @@ export interface RawParsedOrder {
 
 export interface ParseResult {
   orders: RawParsedOrder[];
+  discoveredPrefixes: string[];
   totalOrders: number;
   totalUnits: number;
   errors: string[];
 }
 
 /**
- * Truncates an order reference according to operational standard:
- * Extracts the first 5 characters after standard prefixes (e.g. ORD-04CA76BD -> 04CA7, SH-JW6FUHND5V -> JW6FU).
- * If no prefix or already short, takes the first 5-7 alphanumeric characters.
+ * Dynamic prefix & truncated reference extractor:
+ * Splits on the first '-' (or '_') to separate source_prefix from the rest of the ID,
+ * and extracts the first 5 characters of the body as the truncated order_ref.
+ *
+ * Examples:
+ * - "ORD-04CA76BD"    -> { prefix: "ORD", ref: "04CA7" }
+ * - "SH-JW6FUHND5V"    -> { prefix: "SH",  ref: "JW6FU" }
+ * - "TKH-9B3D188"      -> { prefix: "TKH", ref: "9B3D1" }
+ * - "CUSTOM-12345678"  -> { prefix: "CUSTOM", ref: "12345" }
+ * - "04CA76BD"         -> { prefix: "ORD", ref: "04CA7" }
  */
-export function extractTruncatedOrderRef(rawRef: string): string {
-  if (!rawRef) return '';
-  
-  let clean = rawRef.trim().replace(/^#/, '');
+export function extractPrefixAndTruncatedRef(rawRef: string): { prefix: string; ref: string } {
+  if (!rawRef) return { prefix: 'ORD', ref: '' };
 
-  // Check for common prefixes like ORD-, SH-, TKH-, ORD_, SH_
-  const prefixMatch = clean.match(/^(?:ORD|SH|TKH|TIKO|INV)[-_]?([a-zA-Z0-9]+)/i);
-  if (prefixMatch && prefixMatch[1]) {
-    return prefixMatch[1].substring(0, 5).toUpperCase();
-  }
+  const clean = rawRef.trim().replace(/^#/, '');
 
-  // If there is a hyphen or underscore, take the part after first delimiter
   if (clean.includes('-') || clean.includes('_')) {
-    const parts = clean.split(/[-_]/).filter(Boolean);
-    if (parts.length > 1) {
-      return parts[1].substring(0, 5).toUpperCase();
-    }
+    const delimiter = clean.includes('-') ? '-' : '_';
+    const firstDelimIdx = clean.indexOf(delimiter);
+    const prefixPart = clean.substring(0, firstDelimIdx).trim().toUpperCase();
+    const bodyPart = clean.substring(firstDelimIdx + 1).trim();
+
+    const prefix = prefixPart || 'ORD';
+    const ref = bodyPart.substring(0, 5).toUpperCase();
+    return { prefix, ref };
   }
 
-  // Fallback: first 5 characters uppercase
-  return clean.substring(0, 5).toUpperCase();
+  // Fallback if no delimiter: default prefix 'ORD', first 5 chars
+  return {
+    prefix: 'ORD',
+    ref: clean.substring(0, 5).toUpperCase()
+  };
 }
 
 /**
@@ -70,7 +79,7 @@ export function splitCsvLine(line: string): string[] {
   const result: string[] = [];
   let current = '';
   let inQuotes = false;
-  
+
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
     if (char === '"') {
@@ -95,14 +104,15 @@ export function parseTikoHubCSV(csvContent: string): ParseResult {
   const lines = csvContent.split(/\r?\n/).filter(line => line.trim().length > 0);
   const errors: string[] = [];
   const orders: RawParsedOrder[] = [];
-  
+  const discoveredPrefixes = new Set<string>();
+
   if (lines.length < 2) {
-    return { orders: [], totalOrders: 0, totalUnits: 0, errors: ['CSV file is empty or missing data rows.'] };
+    return { orders: [], discoveredPrefixes: [], totalOrders: 0, totalUnits: 0, errors: ['CSV file is empty or missing data rows.'] };
   }
 
   // Parse headers
   const headers = splitCsvLine(lines[0]).map(h => h.toLowerCase());
-  
+
   // Find column indices
   let orderRefIdx = headers.findIndex(h => ['order id', 'order reference', 'order number', 'id', 'reference', 'order_ref', 'ref', 'order'].includes(h));
   let skuIdx = headers.findIndex(h => ['sku', 'item sku', 'lineitem sku', 'product sku', 'item', 'skus', 'product'].includes(h));
@@ -122,7 +132,7 @@ export function parseTikoHubCSV(csvContent: string): ParseResult {
     if (qtyIdx === -1) qtyIdx = 2;
   }
 
-  const rawOrderRefs = new Set<string>();
+  const uniqueOrders = new Set<string>();
   let totalUnits = 0;
 
   for (let i = 1; i < lines.length; i++) {
@@ -141,17 +151,21 @@ export function parseTikoHubCSV(csvContent: string): ParseResult {
       continue;
     }
 
-    const truncatedRef = extractTruncatedOrderRef(rawRef);
+    const { prefix, ref: truncatedRef } = extractPrefixAndTruncatedRef(rawRef);
+    discoveredPrefixes.add(prefix);
+
     const sku = normalizeSku(rawSku);
     const qty = parseInt(qtyStr, 10) || 1;
     const cleanPrice = parseFloat(priceStr.replace(/[^0-9.]/g, '')) || 0;
 
-    rawOrderRefs.add(truncatedRef);
+    const orderCompositeKey = `${prefix}-${truncatedRef}`;
+    uniqueOrders.add(orderCompositeKey);
     totalUnits += qty;
 
     // Expand multi-unit orders into 1 item per unit
     for (let u = 0; u < qty; u++) {
       orders.push({
+        source_prefix: prefix,
         order_ref: truncatedRef,
         original_sku: sku,
         amount_paid: cleanPrice > 0 ? (cleanPrice / qty) : 0,
@@ -166,7 +180,8 @@ export function parseTikoHubCSV(csvContent: string): ParseResult {
 
   return {
     orders,
-    totalOrders: rawOrderRefs.size,
+    discoveredPrefixes: Array.from(discoveredPrefixes),
+    totalOrders: uniqueOrders.size,
     totalUnits,
     errors
   };
