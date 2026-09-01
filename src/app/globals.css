@@ -87,11 +87,17 @@ html, body {
   color: var(--accent);
 }
 
-.location-picker {
+.header-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.location-picker, .role-picker {
   background: #FFFFFF;
   color: var(--label-primary);
   border: 0.5px solid var(--divider);
-  padding: 7px 14px;
+  padding: 7px 12px;
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 600;
@@ -102,11 +108,11 @@ html, body {
   transition: all 0.15s ease;
 }
 
-.location-picker:focus {
+.location-picker:focus, .role-picker:focus {
   border-color: var(--accent);
 }
 
-/* Segmented Tabs */
+/* Segmented Menu Tabs */
 .tabs-nav {
   display: flex;
   background: #E5E5EA;
@@ -114,11 +120,13 @@ html, body {
   border-radius: 10px;
   margin: 16px 28px 0 28px;
   gap: 3px;
+  overflow-x: auto;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 8px 16px;
+  min-width: 110px;
+  padding: 8px 14px;
   border: none;
   background: transparent;
   color: var(--label-secondary);
@@ -129,6 +137,7 @@ html, body {
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: center;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -139,6 +148,87 @@ html, body {
   background: #FFFFFF;
   color: var(--label-primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Dashboard Analytics Filter Bar */
+.dashboard-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 28px 16px 28px;
+  flex-wrap: wrap;
+}
+
+.timeframe-group {
+  display: flex;
+  background: #E5E5EA;
+  padding: 3px;
+  border-radius: 8px;
+  gap: 2px;
+}
+
+.timeframe-btn {
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--label-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-stack);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.timeframe-btn:hover {
+  color: var(--label-primary);
+}
+
+.timeframe-btn.active {
+  background: #FFFFFF;
+  color: var(--label-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Executive Metric Hero Grid */
+.metric-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin: 0 28px 18px 28px;
+}
+
+.hero-metric-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-card);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.hero-metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--label-secondary);
+  margin-bottom: 6px;
+}
+
+.hero-metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--label-primary);
+  letter-spacing: -0.5px;
+}
+
+.hero-metric-sub {
+  font-size: 11px;
+  color: var(--label-secondary);
+  margin-top: 4px;
 }
 
 /* Widescreen 2-Column Grid */
@@ -190,6 +280,38 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* Category Progress Bars */
+.cat-progress-item {
+  margin-bottom: 12px;
+}
+
+.cat-progress-item:last-child {
+  margin-bottom: 0;
+}
+
+.cat-progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
+.cat-progress-track {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-screen);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.cat-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
 }
 
 /* Form Rows & Hairlines */
@@ -309,7 +431,7 @@ input::placeholder {
   color: var(--label-primary);
 }
 
-/* Elegant Size Selection Chips in Form */
+/* Size Chips in Form */
 .size-chips-container {
   display: flex;
   flex-wrap: wrap;
@@ -360,9 +482,7 @@ input::placeholder {
   color: var(--label-secondary);
 }
 
-/* ========================================================================= */
-/* SLEEK & MINIMALIST "AVAILABLE STOCK" SECTION */
-/* ========================================================================= */
+/* Sleek Available Stock Section */
 .stock-matrix-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -471,20 +591,9 @@ input::placeholder {
   font-weight: 600;
 }
 
-.status-badge.dispatched {
-  background: var(--success-light);
-  color: var(--success);
-}
-
-.status-badge.swapped {
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.status-badge.pending {
-  background: var(--warning-light);
-  color: var(--warning);
-}
+.status-badge.dispatched { background: var(--success-light); color: var(--success); }
+.status-badge.swapped { background: var(--accent-light); color: var(--accent); }
+.status-badge.pending { background: var(--warning-light); color: var(--warning); }
 
 /* Buttons */
 .btn {
@@ -534,7 +643,7 @@ input::placeholder {
   width: 100%;
 }
 
-/* Clean Stock Tables */
+/* Stock Tables */
 .stock-table {
   width: 100%;
   border-collapse: collapse;
@@ -601,7 +710,6 @@ input::placeholder {
 .delta-box.refund { background: var(--destructive-light); color: var(--destructive); }
 .delta-box.even { background: #E5E5EA; color: var(--label-secondary); }
 
-/* Result Empty */
 .result-empty {
   color: var(--label-secondary);
   text-align: center;
