@@ -206,7 +206,7 @@ export default function Dashboard() {
       });
 
       if (res.success) {
-        setSyncStatusText('All offline transactions synced!');
+        setSyncStatusText('All offline transactions synced.');
         setTimeout(() => setSyncStatusText(''), 3000);
       } else {
         setSyncStatusText(`Sync complete with ${res.errors.length} errors.`);
@@ -262,8 +262,6 @@ export default function Dashboard() {
 
   // Auto-lookup Price for Current Category | Color | Size
   const currentSelectedSku = useMemo(() => {
-    const colorPart = selectedColor === 'Standard' ? '' : selectedColor;
-    const sizePart = selectedSize === 'None' ? '' : selectedSize;
     return `${selectedCategory}|${selectedColor}|${selectedSize}`;
   }, [selectedCategory, selectedColor, selectedSize]);
 
@@ -369,7 +367,7 @@ export default function Dashboard() {
     };
   }, [orders, fulfillments, stockOnHand, selectedLocationId]);
 
-  // MAIN WORKHORSE: Log Order / Sale & Dispatch Jersey (1-Click)
+  // MAIN WORKHORSE: Log Order / Sale & Dispatch Jersey
   const handleLogAndDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!logOrderRef.trim()) {
@@ -398,7 +396,6 @@ export default function Dashboard() {
       notes: logNotes.trim() || (logDestination.trim() ? `Destination: ${logDestination.trim()}` : 'Direct counter dispatch')
     };
 
-    // Optimistic state updates
     const mockOrder: Order = {
       id: 'temp-ord-' + Date.now(),
       source_prefix: payload.sourcePrefix,
@@ -437,7 +434,6 @@ export default function Dashboard() {
         : s
     ));
 
-    // Reset Form for next customer
     setLogOrderRef('');
     setLogCustomerName('');
     setLogCustomerPhone('');
@@ -709,7 +705,7 @@ export default function Dashboard() {
 
   return (
     <main className="app-wrapper">
-      {/* iOS Header (Apple HIG with Full Widescreen Layout) */}
+      {/* iOS Header */}
       <header className="ios-header">
         <div className="branding">
           <div className="pre-title">Fulfilled By Griphine</div>
@@ -736,7 +732,6 @@ export default function Dashboard() {
           >
             {locations.map(loc => (
               <option key={loc.id} value={loc.id}>
-                {loc.type === 'warehouse' ? '🏢 ' : '🎪 '}
                 {loc.name}
               </option>
             ))}
@@ -750,7 +745,7 @@ export default function Dashboard() {
           >
             {STAFF_PROFILES.map(s => (
               <option key={s.id} value={s.id}>
-                👤 {s.name}
+                {s.name}
               </option>
             ))}
           </select>
@@ -763,42 +758,35 @@ export default function Dashboard() {
           onClick={() => setActiveTab('fulfillment')}
           className={`tab-btn ${activeTab === 'fulfillment' ? 'active' : ''}`}
         >
-          ⚡ Log & Dispatch
+          Log & Dispatch
         </button>
         <button
           onClick={() => setActiveTab('stock')}
           className={`tab-btn ${activeTab === 'stock' ? 'active' : ''}`}
         >
-          📦 Stock & Catalog
+          Stock & Catalog
         </button>
         <button
           onClick={() => setActiveTab('importer')}
           className={`tab-btn ${activeTab === 'importer' ? 'active' : ''}`}
         >
-          📥 CSV Import
+          CSV Import
         </button>
         <button
           onClick={() => setActiveTab('reports')}
           className={`tab-btn ${activeTab === 'reports' ? 'active' : ''}`}
         >
-          📊 Reconciliation
+          Reconciliation
         </button>
       </nav>
 
       {/* Offline Alert Banner */}
       {queueSize > 0 && (
         <div className="alert-banner">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="8" x2="12" y2="12"></line>
-              <line x1="12" y1="16" x2="12.01" y2="16"></line>
-            </svg>
-            <div>
-              <strong>{queueSize} offline transaction{queueSize > 1 ? 's' : ''} queued!</strong>
-              <div style={{ fontSize: '11px', color: 'var(--label-secondary)' }}>
-                {syncStatusText || 'Saved locally in tent queue. Ready to sync.'}
-              </div>
+          <div>
+            <strong>{queueSize} offline transaction{queueSize > 1 ? 's' : ''} queued</strong>
+            <div style={{ fontSize: '11px', color: 'var(--label-secondary)', marginTop: '2px' }}>
+              {syncStatusText || 'Saved locally in tent queue. Ready to sync.'}
             </div>
           </div>
           {isOnline && (
@@ -810,7 +798,7 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: LOG SALE & DISPATCH STATION (WIDESCREEN 2-COLUMN WORKHORSE) */}
+      {/* TAB 1: LOG SALE & DISPATCH STATION */}
       {/* ========================================================================= */}
       {activeTab === 'fulfillment' && (
         <div className="main-grid">
@@ -818,9 +806,9 @@ export default function Dashboard() {
           <div>
             <div className="card" style={{ padding: '20px' }}>
               <div className="card-title" style={{ fontSize: '17px', marginBottom: '16px' }}>
-                <span>⚡ Log Order & Dispatch Jersey</span>
+                <span>Log Order & Dispatch Jersey</span>
                 <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent)' }}>
-                  🎪 {activeLocation.name.split(' ')[0]}
+                  {activeLocation.name.split(' ')[0]}
                 </span>
               </div>
 
@@ -828,7 +816,7 @@ export default function Dashboard() {
               {typedCollision && (
                 <div className="collision-box" style={{ margin: '0 0 16px 0' }}>
                   <div className="collision-title">
-                    <span>⚡ Collision: #{logOrderRef}</span>
+                    <span>Collision: #{logOrderRef}</span>
                   </div>
                   <div className="collision-subtitle">
                     Found {typedCollision.length} existing orders with this ID across channels:
@@ -958,7 +946,7 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Field 6: Upgrade Cash Delta (If customer pays extra) */}
+                  {/* Field 6: Upgrade Cash Delta */}
                   <div className="form-row">
                     <span className="row-label">
                       Extra Cash Delta
@@ -996,7 +984,7 @@ export default function Dashboard() {
                       padding: 0
                     }}
                   >
-                    <span>{showOptionalDetails ? '▼ Hide Customer & Delivery Details' : '▶ + Add Buyer Name / Delivery Destination (Optional)'}</span>
+                    <span>{showOptionalDetails ? 'Hide Customer & Delivery Details' : '+ Add Buyer Name / Delivery Destination (Optional)'}</span>
                   </button>
 
                   {showOptionalDetails && (
@@ -1064,14 +1052,14 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* Submit 1-Tap Fulfillment Button */}
+                {/* Submit Fulfillment Button */}
                 <button
                   type="submit"
                   className="btn green block"
                   style={{ height: '48px', fontSize: '15px', fontWeight: 700 }}
                   disabled={isPending}
                 >
-                  ⚡ Log Sale & Dispatch Jersey (1-Click)
+                  Log Sale & Dispatch Jersey
                 </button>
               </form>
             </div>
@@ -1110,7 +1098,7 @@ export default function Dashboard() {
             {/* Live Stock on Hand at this Location */}
             <div className="card" style={{ margin: '0 0 16px 0', padding: '16px' }}>
               <div className="card-title">
-                <span>📦 Live Tent Stock Availability</span>
+                <span>Live Tent Stock Availability</span>
                 <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>Click size to quick-fill form</span>
               </div>
 
@@ -1119,7 +1107,6 @@ export default function Dashboard() {
                   const catItems = stockOnHand.filter(s => s.location_id === selectedLocationId && s.category === cat);
                   if (catItems.length === 0) return null;
 
-                  // Group by color
                   const colors = [...new Set(catItems.map(c => c.color || 'Standard'))];
 
                   return (
@@ -1182,7 +1169,7 @@ export default function Dashboard() {
             {/* Recent Dispatches Feed */}
             <div className="card" style={{ padding: '16px' }}>
               <div className="card-title">
-                <span>🕒 Recent Dispatches Today</span>
+                <span>Recent Dispatches Today</span>
                 <input
                   type="text"
                   placeholder="Filter recent..."
@@ -1215,13 +1202,13 @@ export default function Dashboard() {
                           </div>
 
                           <span className={`status-badge ${isSwap ? 'status-Pending-Delivery' : 'status-Collected'}`}>
-                            {isSwap ? 'Swapped ✓' : 'Dispatched ✓'}
+                            {isSwap ? 'Swapped' : 'Dispatched'}
                           </span>
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                           <div style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
-                            👕 {order.fulfillment?.actual_sku || order.original_sku} &middot; {order.amount_paid} KES
+                            {order.fulfillment?.actual_sku || order.original_sku} &middot; {order.amount_paid} KES
                             {order.fulfillment && order.fulfillment.cash_collected > 0 && ` (+${order.fulfillment.cash_collected} KES)`}
                           </div>
 
@@ -1230,7 +1217,7 @@ export default function Dashboard() {
                             className="btn secondary small"
                             style={{ fontSize: '11px', height: '24px', padding: '2px 8px' }}
                           >
-                            ⇄ Swap / Fix
+                            Swap / Fix
                           </button>
                         </div>
                       </div>
@@ -1252,7 +1239,7 @@ export default function Dashboard() {
           <div>
             <div className="card">
               <div className="card-title">
-                <span>👕 Admin SKU Catalog & OG Pricing</span>
+                <span>Admin SKU Catalog & OG Pricing</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '14px' }}>
                 Define sellable jersey categories, sizes, and baseline prices. These prices automatically populate when staff log orders at tents.
@@ -1324,7 +1311,7 @@ export default function Dashboard() {
 
                 <div style={{ padding: '12px 18px' }}>
                   <button type="submit" className="btn green block" disabled={isPending}>
-                    {isPending ? 'Saving...' : '+ Add / Update Catalog SKU & Price'}
+                    {isPending ? 'Saving...' : 'Add / Update Catalog SKU & Price'}
                   </button>
                 </div>
               </form>
@@ -1362,7 +1349,7 @@ export default function Dashboard() {
             {/* 1. Log Warehouse Stock-In */}
             <div className="card" style={{ marginBottom: '16px' }}>
               <div className="card-title">
-                <span>📥 1. Log Warehouse Stock-In</span>
+                <span>1. Log Warehouse Stock-In</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
                 Record incoming deliveries from suppliers into Main Warehouse stock.
@@ -1415,7 +1402,7 @@ export default function Dashboard() {
             {/* 2. Stock Transfer to Event Tent */}
             <div className="card">
               <div className="card-title">
-                <span>🚚 2. Stock Transfer to Event Tent</span>
+                <span>2. Stock Transfer to Event Tent</span>
               </div>
               <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
                 Allocate merchandise from Main Warehouse to a specific event tent.
@@ -1437,7 +1424,7 @@ export default function Dashboard() {
                   <div className="row-control">
                     <select value={transferDestLocation} onChange={(e) => setTransferDestLocation(e.target.value)} required>
                       {locations.filter(l => l.type === 'event').map(l => (
-                        <option key={l.id} value={l.id}>🎪 {l.name}</option>
+                        <option key={l.id} value={l.id}>{l.name}</option>
                       ))}
                     </select>
                   </div>
@@ -1485,7 +1472,7 @@ export default function Dashboard() {
       {activeTab === 'importer' && (
         <div className="full-width-card card">
           <div className="card-title">
-            <span>📥 Batch CSV Orders Ingest</span>
+            <span>Batch CSV Orders Ingest</span>
           </div>
           <p style={{ fontSize: '13px', color: 'var(--label-secondary)', marginBottom: '16px' }}>
             Upload CSV exports from TikoHub or Shopify. The system dynamically splits on the first <code>-</code> to capture prefixes (<code>ORD</code>, <code>SH</code>, <code>TKH</code>), truncates the ID to 5 characters, expands multi-unit rows, and registers new prefixes automatically.
@@ -1572,7 +1559,7 @@ export default function Dashboard() {
         <div className="full-width-card">
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>📊 Merchandise Category Reconciliation</span>
+              <span>Merchandise Category Reconciliation</span>
             </div>
             <table className="stock-table">
               <thead>
@@ -1602,7 +1589,7 @@ export default function Dashboard() {
 
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>🎯 Ordered vs. What Went Out (Audit Matrix)</span>
+              <span>Ordered vs. What Went Out (Audit Matrix)</span>
             </div>
             <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
               <table className="stock-table">
@@ -1656,7 +1643,7 @@ export default function Dashboard() {
 
           <div className="card" style={{ marginBottom: '16px' }}>
             <div className="card-title">
-              <span>⚙️ Dynamic Order Prefixes (Config Table)</span>
+              <span>Dynamic Order Prefixes (Config Table)</span>
             </div>
             <table className="stock-table">
               <thead>
@@ -1726,13 +1713,13 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: SWAP SKU (iOS Centered Sheet) */}
+      {/* MODAL: SWAP SKU */}
       {/* ========================================================================= */}
       {swapModalOpen && swapOrder && (
         <div className="modal">
           <div className="modal-content">
             <div className="card-title">
-              <span>⇄ Swap / Upgrade SKU</span>
+              <span>Swap / Upgrade SKU</span>
               <button onClick={() => setSwapModalOpen(false)} className="btn small secondary">Cancel</button>
             </div>
 
