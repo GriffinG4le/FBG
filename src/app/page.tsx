@@ -1747,81 +1747,15 @@ export default function Dashboard() {
             </form>
           </div>
 
-          {/* Quick Transfer Card */}
+          {/* Catalog & Baseline Pricing */}
           <div className="card">
-            <div className="card-head">Quick transfer to event tent</div>
-            <form className="form" onSubmit={handleDispatchStockToEvent}>
-              <div className="field">
-                <span className="field-label">Select SKU</span>
-                <select
-                  className="plain"
-                  value={eventDispatchSku}
-                  onChange={(e) => setEventDispatchSku(e.target.value)}
-                  required
-                >
-                  <option value="">Choose warehouse stock...</option>
-                  {catalog.map(c => (
-                    <option key={c.sku} value={c.sku}>
-                      {c.sku} ({c.price} KES)
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Destination</span>
-                <select
-                  className="plain"
-                  value={eventDispatchEventId}
-                  onChange={(e) => setEventDispatchEventId(e.target.value)}
-                  required
-                >
-                  <option value="">Select Event...</option>
-                  {locations.filter(l => l.type === 'event').map(l => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Transfer Quantity</span>
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="e.g. 20"
-                  value={eventDispatchQty}
-                  onChange={(e) => setEventDispatchQty(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
-                  required
-                />
-              </div>
-
-              <div className="field">
-                <span className="field-label">Transfer Notes</span>
-                <input
-                  type="text"
-                  placeholder="e.g. Tent allocation batch"
-                  value={eventDispatchNotes}
-                  onChange={(e) => setEventDispatchNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
-                />
-              </div>
-
-              <button type="submit" className="submit" disabled={isPending}>
-                Dispatch transfer to tent
-              </button>
-            </form>
-          </div>
-
-          {/* Catalog & OG Pricing */}
-          <div className="card" style={{ gridColumn: '1 / -1' }}>
             <div className="card-head">
               <span>SKU catalog & baseline pricing</span>
               <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
                 Total registered SKUs: <strong>{catalog.length}</strong>
               </span>
             </div>
-            <div style={{ padding: '0 0 12px 0', maxHeight: '350px', overflowY: 'auto' }}>
+            <div style={{ padding: '0 0 12px 0', maxHeight: '440px', overflowY: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
