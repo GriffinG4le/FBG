@@ -4,6 +4,8 @@
 import {
   getLocations,
   getCatalog,
+  upsertCatalogItem,
+  deleteCatalogItem,
   getDerivedStockOnHand,
   getOrders,
   getFulfillments,
@@ -61,6 +63,25 @@ export async function getCatalogAction(): Promise<CatalogItem[]> {
     throw new Error("Failed to load catalog.");
   }
 }
+
+export async function upsertCatalogItemAction(item: CatalogItem): Promise<void> {
+  try {
+    await upsertCatalogItem(item);
+  } catch (error) {
+    console.error("Failed to upsert catalog item:", error);
+    throw new Error("Failed to save catalog SKU.");
+  }
+}
+
+export async function deleteCatalogItemAction(sku: string): Promise<void> {
+  try {
+    await deleteCatalogItem(sku);
+  } catch (error) {
+    console.error("Failed to delete catalog item:", error);
+    throw new Error("Failed to delete catalog SKU.");
+  }
+}
+
 
 export async function getDerivedStockOnHandAction(locationId?: string): Promise<StockOnHandItem[]> {
   try {
@@ -162,7 +183,7 @@ export async function quickWalkUpFulfillAction(params: {
   staffId: string;
   customerName?: string | null;
   customerPhone?: string | null;
-  channel?: 'Event' | 'Card' | 'Manual';
+  channel?: 'Online' | 'Event' | 'Card' | 'Manual';
   notes?: string | null;
 }): Promise<{ order: Order; fulfillment: Fulfillment; ledgerRow: LedgerRow }> {
   try {

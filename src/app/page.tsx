@@ -6,6 +6,8 @@ import {
   getOrderPrefixesAction,
   updateOrderPrefixLabelAction,
   getCatalogAction,
+  upsertCatalogItemAction,
+  deleteCatalogItemAction,
   getDerivedStockOnHandAction,
   getOrdersAction,
   getFulfillmentsAction,
@@ -63,10 +65,30 @@ export default function Dashboard() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncStatusText, setSyncStatusText] = useState<string>('');
 
-  // Search & Filter
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'fulfilled'>('all');
+  // Primary Order Logging Form State
+  const [logPrefix, setLogPrefix] = useState<string>('ORD');
+  const [logOrderRef, setLogOrderRef] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('Fan Jersey');
+  const [selectedColor, setSelectedColor] = useState<string>('White');
+  const [selectedSize, setSelectedSize] = useState<string>('M');
+  const [logAmountPaid, setLogAmountPaid] = useState<string>('2500');
+  const [logCashCollected, setLogCashCollected] = useState<string>('0');
+  const [logCustomerName, setLogCustomerName] = useState<string>('');
+  const [logCustomerPhone, setLogCustomerPhone] = useState<string>('');
+  const [logDestination, setLogDestination] = useState<string>('');
+  const [logChannel, setLogChannel] = useState<'Online' | 'Event' | 'Card'>('Event');
+  const [logNotes, setLogNotes] = useState<string>('');
+  const [showOptionalDetails, setShowOptionalDetails] = useState<boolean>(false);
+
+  // Search & Filters for Right Panel
+  const [recentSearchQuery, setRecentSearchQuery] = useState<string>('');
+
+  // Admin Catalog Manager Form
+  const [newCatalogCategory, setNewCatalogCategory] = useState<string>('Fan Jersey');
+  const [newCatalogColor, setNewCatalogColor] = useState<string>('White');
+  const [newCatalogSize, setNewCatalogSize] = useState<string>('M');
+  const [newCatalogPrice, setNewCatalogPrice] = useState<number>(2500);
+  const [newCatalogThreshold, setNewCatalogThreshold] = useState<number>(10);
 
   // Modals
   const [swapModalOpen, setSwapModalOpen] = useState<boolean>(false);
@@ -76,18 +98,6 @@ export default function Dashboard() {
   const [swapOverrideReason, setSwapOverrideReason] = useState<string>('');
   const [swapChannel, setSwapChannel] = useState<'Event' | 'Card'>('Event');
   const [swapNotes, setSwapNotes] = useState<string>('');
-
-  const [walkUpModalOpen, setWalkUpModalOpen] = useState<boolean>(false);
-  const [walkUpPrefix, setWalkUpPrefix] = useState<string>('MANUAL');
-  const [walkUpRef, setWalkUpRef] = useState<string>('');
-  const [walkUpOrigSku, setWalkUpOrigSku] = useState<string>('');
-  const [walkUpActualSku, setWalkUpActualSku] = useState<string>('');
-  const [walkUpPaid, setWalkUpPaid] = useState<string>('2500');
-  const [walkUpCashDelta, setWalkUpCashDelta] = useState<string>('0');
-  const [walkUpCustomerName, setWalkUpCustomerName] = useState<string>('');
-  const [walkUpCustomerPhone, setWalkUpCustomerPhone] = useState<string>('');
-  const [walkUpChannel, setWalkUpChannel] = useState<'Event' | 'Card'>('Event');
-  const [walkUpNotes, setWalkUpNotes] = useState<string>('');
 
   // Warehouse Stock-In Form
   const [stockInSku, setStockInSku] = useState<string>('');
@@ -163,8 +173,6 @@ export default function Dashboard() {
       if (cats.length > 0) {
         if (!stockInSku) setStockInSku(cats[0].sku);
         if (!transferSku) setTransferSku(cats[0].sku);
-        if (!walkUpOrigSku) setWalkUpOrigSku(cats[0].sku);
-        if (!walkUpActualSku) setWalkUpActualSku(cats[0].sku);
       }
     } catch (err) {
       console.error("Error loading application data:", err);
@@ -225,6 +233,77 @@ export default function Dashboard() {
     };
   }, [locations, selectedLocationId]);
 
+  // Derived Dynamic Categories & Colors from Catalog
+  const availableCategories = useMemo(() => {
+    return [...new Set(catalog.map(c => c.category))].filter(Boolean);
+  }, [catalog]);
+
+  const availableColorsForSelectedCategory = useMemo(() => {
+    return [...new Set(
+      catalog
+        .filter(c => c.category === selectedCategory)
+        .map(c => c.color || 'Standard')
+    )];
+  }, [catalog, selectedCategory]);
+
+  const availableSizesForSelectedCategoryColor = useMemo(() => {
+    const order = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '2XL', '3XL', '4XL', '5XL', 'None'];
+    const sizes = catalog
+      .filter(c => c.category === selectedCategory && (c.color || 'Standard') === selectedColor)
+      .map(c => c.size || 'None');
+    
+    return [...new Set(sizes)].sort((a, b) => {
+      const idxA = order.indexOf(a);
+      const idxB = order.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      return a.localeCompare(b);
+    });
+  }, [catalog, selectedCategory, selectedColor]);
+
+  // Auto-lookup Price for Current Category | Color | Size
+  const currentSelectedSku = useMemo(() => {
+    const colorPart = selectedColor === 'Standard' ? '' : selectedColor;
+    const sizePart = selectedSize === 'None' ? '' : selectedSize;
+    return `${selectedCategory}|${selectedColor}|${selectedSize}`;
+  }, [selectedCategory, selectedColor, selectedSize]);
+
+  const currentSkuPrice = useMemo(() => {
+    const item = catalog.find(c => 
+      c.category === selectedCategory && 
+      (c.color || 'Standard') === selectedColor && 
+      (c.size || 'None') === selectedSize
+    );
+    return item ? item.price : 2500;
+  }, [catalog, selectedCategory, selectedColor, selectedSize]);
+
+  // When Category or Color or Size changes, update auto-populated amount
+  useEffect(() => {
+    setLogAmountPaid(currentSkuPrice.toString());
+  }, [currentSkuPrice]);
+
+  // When Category changes, auto-select first available color
+  const handleCategoryChange = (cat: string) => {
+    setSelectedCategory(cat);
+    const colors = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
+    if (colors.length > 0) {
+      setSelectedColor(colors[0]);
+      const sizes = catalog.filter(c => c.category === cat && (c.color || 'Standard') === colors[0]).map(c => c.size || 'None');
+      if (sizes.length > 0) setSelectedSize(sizes[0]);
+    }
+  };
+
+  const handleColorChange = (col: string) => {
+    setSelectedColor(col);
+    const sizes = catalog.filter(c => c.category === selectedCategory && (c.color || 'Standard') === col).map(c => c.size || 'None');
+    if (sizes.length > 0) setSelectedSize(sizes[0]);
+  };
+
+  // Get live stock remaining at current selected location for a SKU
+  const getStockRemainingAtLocation = (sku: string) => {
+    const item = stockOnHand.find(s => s.location_id === selectedLocationId && s.sku === sku);
+    return item ? item.stock_on_hand : 0;
+  };
+
   // Orders Map & Join with Fulfillments
   const enrichedOrders = useMemo(() => {
     return orders.map(ord => {
@@ -236,55 +315,37 @@ export default function Dashboard() {
     });
   }, [orders, fulfillments]);
 
-  // Filtered Orders for Fulfillment Tab
-  const filteredOrders = useMemo(() => {
-    let list = enrichedOrders;
-
-    if (statusFilter !== 'all') {
-      list = list.filter(o => o.status === statusFilter);
+  // Recent Fulfillments at this location
+  const recentFulfillmentsAtLocation = useMemo(() => {
+    let list = enrichedOrders.filter(o => o.status === 'fulfilled');
+    if (selectedLocationId !== 'wh-main') {
+      list = list.filter(o => o.fulfillment?.location_id === selectedLocationId);
     }
-
-    if (searchQuery.trim().length > 0) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter(o => 
+    if (recentSearchQuery.trim()) {
+      const q = recentSearchQuery.trim().toLowerCase();
+      list = list.filter(o =>
         o.order_ref.toLowerCase().includes(q) ||
-        `${o.source_prefix}-${o.order_ref}`.toLowerCase().includes(q) ||
         o.original_sku.toLowerCase().includes(q) ||
         (o.fulfillment?.actual_sku && o.fulfillment.actual_sku.toLowerCase().includes(q)) ||
-        (o.customer_name && o.customer_name.toLowerCase().includes(q)) ||
-        (o.customer_phone && o.customer_phone.toLowerCase().includes(q))
+        (o.customer_name && o.customer_name.toLowerCase().includes(q))
       );
     }
+    return list.slice(0, 15);
+  }, [enrichedOrders, selectedLocationId, recentSearchQuery]);
 
-    return list;
-  }, [enrichedOrders, statusFilter, searchQuery]);
-
-  // COLLISION DETECTION: Check if search query matches multiple orders with same order_ref across different prefixes
-  const collisionMatches = useMemo(() => {
-    if (!searchQuery || searchQuery.trim().length < 3) return null;
-    const cleanQ = searchQuery.trim().toUpperCase();
-
-    const matchingPending = orders.filter(o => o.status === 'pending' && o.order_ref.toUpperCase().includes(cleanQ));
-    const refGroups = new Map<string, Order[]>();
-
-    for (const ord of matchingPending) {
-      const existing = refGroups.get(ord.order_ref) || [];
-      existing.push(ord);
-      refGroups.set(ord.order_ref, existing);
-    }
-
-    for (const [ref, group] of Array.from(refGroups.entries())) {
-      const prefixesInGroup = new Set(group.map(g => g.source_prefix));
-      if (prefixesInGroup.size > 1) {
-        return {
-          collidingRef: ref,
-          orders: group
-        };
+  // Collision detection for currently typed Order Ref
+  const typedCollision = useMemo(() => {
+    if (!logOrderRef || logOrderRef.trim().length < 3) return null;
+    const clean = logOrderRef.trim().toUpperCase();
+    const matches = orders.filter(o => o.order_ref.toUpperCase() === clean);
+    if (matches.length > 1) {
+      const prefixes = new Set(matches.map(m => m.source_prefix));
+      if (prefixes.size > 1) {
+        return matches;
       }
     }
-
     return null;
-  }, [searchQuery, orders]);
+  }, [logOrderRef, orders]);
 
   // Event KPIs (Derived dynamically)
   const eventMetrics = useMemo(() => {
@@ -308,58 +369,93 @@ export default function Dashboard() {
     };
   }, [orders, fulfillments, stockOnHand, selectedLocationId]);
 
-  // Handle 1-Tap Exact Fulfillment
-  const handleFulfillExact = async (order: Order) => {
+  // MAIN WORKHORSE: Log Order / Sale & Dispatch Jersey (1-Click)
+  const handleLogAndDispatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!logOrderRef.trim()) {
+      alert("Please enter the 5-character Order ID (e.g. 04CA7, JW6FU).");
+      return;
+    }
+
+    const cleanRef = logOrderRef.trim().toUpperCase();
+    const actualSku = currentSelectedSku;
+    const amountPaid = parseFloat(logAmountPaid) || currentSkuPrice;
+    const cashCollected = parseFloat(logCashCollected) || 0;
+
     const payload = {
-      orderId: order.id,
-      sourcePrefix: order.source_prefix,
-      orderRef: order.order_ref,
-      originalSku: order.original_sku,
-      actualSku: order.original_sku,
-      priceDelta: 0,
-      cashCollected: 0,
+      sourcePrefix: logPrefix,
+      orderRef: cleanRef,
+      originalSku: actualSku,
+      actualSku: actualSku,
+      amountPaid: amountPaid,
+      cashCollected: cashCollected,
       overrideReason: null,
       locationId: selectedLocationId,
       staffId: currentStaff.name,
-      notes: 'Standard exact fulfillment'
+      customerName: logCustomerName.trim() || null,
+      customerPhone: logCustomerPhone.trim() || null,
+      channel: logChannel,
+      notes: logNotes.trim() || (logDestination.trim() ? `Destination: ${logDestination.trim()}` : 'Direct counter dispatch')
     };
 
-    const optimisticFulfillment: Fulfillment = {
+    // Optimistic state updates
+    const mockOrder: Order = {
+      id: 'temp-ord-' + Date.now(),
+      source_prefix: payload.sourcePrefix,
+      order_ref: payload.orderRef,
+      original_sku: payload.originalSku,
+      amount_paid: payload.amountPaid,
+      customer_name: payload.customerName,
+      customer_phone: payload.customerPhone,
+      channel: payload.channel,
+      status: 'fulfilled',
+      created_at: new Date().toISOString()
+    };
+
+    const mockFulfillment: Fulfillment = {
       id: 'temp-ful-' + Date.now(),
-      order_id: order.id,
-      source_prefix: order.source_prefix,
-      order_ref: order.order_ref,
-      original_sku: order.original_sku,
-      actual_sku: order.original_sku,
+      order_id: mockOrder.id,
+      source_prefix: payload.sourcePrefix,
+      order_ref: payload.orderRef,
+      original_sku: payload.originalSku,
+      actual_sku: payload.actualSku,
       price_delta: 0,
-      cash_collected: 0,
+      cash_collected: payload.cashCollected,
       override_reason: null,
       location_id: selectedLocationId,
       staff_id: currentStaff.name,
-      notes: 'Standard exact fulfillment',
+      notes: payload.notes,
       fulfilled_at: new Date().toISOString()
     };
 
-    setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'fulfilled' } : o));
-    setFulfillments(prev => [optimisticFulfillment, ...prev]);
+    setOrders(prev => [mockOrder, ...prev]);
+    setFulfillments(prev => [mockFulfillment, ...prev]);
 
     setStockOnHand(prev => prev.map(s => 
-      s.location_id === selectedLocationId && s.sku === order.original_sku
+      s.location_id === selectedLocationId && s.sku === payload.actualSku
         ? { ...s, stock_on_hand: s.stock_on_hand - 1 }
         : s
     ));
 
+    // Reset Form for next customer
+    setLogOrderRef('');
+    setLogCustomerName('');
+    setLogCustomerPhone('');
+    setLogDestination('');
+    setLogNotes('');
+    setLogCashCollected('0');
+
     if (isOnline) {
       try {
-        await fulfillOrderAction(payload);
+        await quickWalkUpFulfillAction(payload);
         loadAllData();
       } catch (err) {
         console.warn("Online dispatch failed, queuing offline:", err);
-        enqueueOfflineAction('fulfill', payload);
+        enqueueOfflineAction('walkup', payload);
         updateQueueCount();
       }
     } else {
-      enqueueOfflineAction('fulfill', payload);
+      enqueueOfflineAction('walkup', payload);
       updateQueueCount();
     }
   };
@@ -383,7 +479,6 @@ export default function Dashboard() {
     return actPrice - origPrice;
   }, [swapOrder, selectedSwapSku, catalog]);
 
-  // Final Cash Collected
   const finalCashCollected = useMemo(() => {
     if (swapCashOverride.trim() !== '') {
       const parsed = parseFloat(swapCashOverride);
@@ -392,7 +487,6 @@ export default function Dashboard() {
     return computedSwapDelta;
   }, [swapCashOverride, computedSwapDelta]);
 
-  // Submit Swap
   const handleSwapSubmit = async () => {
     if (!swapOrder || !selectedSwapSku) return;
 
@@ -454,118 +548,6 @@ export default function Dashboard() {
     }
   };
 
-  // Open Walk-Up Modal
-  const openWalkUpModal = () => {
-    setWalkUpRef('');
-    setWalkUpPrefix('MANUAL');
-    if (catalog.length > 0) {
-      setWalkUpOrigSku(catalog[0].sku);
-      setWalkUpActualSku(catalog[0].sku);
-      setWalkUpPaid(catalog[0].price.toString());
-    }
-    setWalkUpCashDelta('0');
-    setWalkUpCustomerName('');
-    setWalkUpCustomerPhone('');
-    setWalkUpChannel('Event');
-    setWalkUpNotes('');
-    setWalkUpModalOpen(true);
-  };
-
-  const handleWalkUpOrigSkuChange = (sku: string) => {
-    setWalkUpOrigSku(sku);
-    const cat = catalog.find(c => c.sku === sku);
-    if (cat) {
-      setWalkUpPaid(cat.price.toString());
-    }
-    const origPrice = cat?.price || 0;
-    const actPrice = catalog.find(c => c.sku === walkUpActualSku)?.price || 0;
-    setWalkUpCashDelta((actPrice - origPrice).toString());
-  };
-
-  const handleWalkUpActualSkuChange = (sku: string) => {
-    setWalkUpActualSku(sku);
-    const origPrice = catalog.find(c => c.sku === walkUpOrigSku)?.price || 0;
-    const actPrice = catalog.find(c => c.sku === sku)?.price || 0;
-    setWalkUpCashDelta((actPrice - origPrice).toString());
-  };
-
-  const handleWalkUpSubmit = async () => {
-    if (!walkUpRef.trim()) {
-      alert("Please enter a truncated Order ID (e.g. 04CA7).");
-      return;
-    }
-
-    const payload = {
-      sourcePrefix: walkUpPrefix || 'MANUAL',
-      orderRef: walkUpRef.trim().toUpperCase(),
-      originalSku: walkUpOrigSku,
-      actualSku: walkUpActualSku,
-      amountPaid: parseFloat(walkUpPaid) || 0,
-      cashCollected: parseFloat(walkUpCashDelta) || 0,
-      overrideReason: null,
-      locationId: selectedLocationId,
-      staffId: currentStaff.name,
-      customerName: walkUpCustomerName.trim() || null,
-      customerPhone: walkUpCustomerPhone.trim() || null,
-      channel: walkUpChannel,
-      notes: walkUpNotes.trim() || 'Tent Walk-Up Entry'
-    };
-
-    const mockOrder: Order = {
-      id: 'temp-ord-' + Date.now(),
-      source_prefix: payload.sourcePrefix,
-      order_ref: payload.orderRef,
-      original_sku: payload.originalSku,
-      amount_paid: payload.amountPaid,
-      customer_name: payload.customerName,
-      customer_phone: payload.customerPhone,
-      channel: payload.channel,
-      status: 'fulfilled',
-      created_at: new Date().toISOString()
-    };
-
-    const mockFulfillment: Fulfillment = {
-      id: 'temp-ful-' + Date.now(),
-      order_id: mockOrder.id,
-      source_prefix: payload.sourcePrefix,
-      order_ref: payload.orderRef,
-      original_sku: payload.originalSku,
-      actual_sku: payload.actualSku,
-      price_delta: payload.cashCollected,
-      cash_collected: payload.cashCollected,
-      override_reason: null,
-      location_id: selectedLocationId,
-      staff_id: currentStaff.name,
-      notes: payload.notes,
-      fulfilled_at: new Date().toISOString()
-    };
-
-    setOrders(prev => [mockOrder, ...prev]);
-    setFulfillments(prev => [mockFulfillment, ...prev]);
-
-    setStockOnHand(prev => prev.map(s => 
-      s.location_id === selectedLocationId && s.sku === payload.actualSku
-        ? { ...s, stock_on_hand: s.stock_on_hand - 1 }
-        : s
-    ));
-
-    setWalkUpModalOpen(false);
-
-    if (isOnline) {
-      try {
-        await quickWalkUpFulfillAction(payload);
-        loadAllData();
-      } catch (err) {
-        console.warn("Online walk-up failed, queuing offline:", err);
-        enqueueOfflineAction('walkup', payload);
-        updateQueueCount();
-      }
-    } else {
-      enqueueOfflineAction('walkup', payload);
-      updateQueueCount();
-    }
-  };
-
   // Submit Warehouse Stock-In
   const handleStockInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -606,6 +588,30 @@ export default function Dashboard() {
     });
   };
 
+  // Admin Add / Update Catalog Item
+  const handleSaveCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const sku = `${newCatalogCategory}|${newCatalogColor}|${newCatalogSize}`;
+    const item: CatalogItem = {
+      sku,
+      category: newCatalogCategory,
+      color: newCatalogColor === 'None' ? null : newCatalogColor,
+      size: newCatalogSize === 'None' ? null : newCatalogSize,
+      price: newCatalogPrice,
+      low_stock_threshold: newCatalogThreshold
+    };
+
+    startTransition(async () => {
+      try {
+        await upsertCatalogItemAction(item);
+        alert(`Catalog SKU Saved: ${sku} @ ${newCatalogPrice} KES.`);
+        loadAllData();
+      } catch (err) {
+        alert(`Failed to save catalog SKU.`);
+      }
+    });
+  };
+
   // CSV Importer: File load
   const handleCSVFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -621,7 +627,6 @@ export default function Dashboard() {
     reader.readAsText(file);
   };
 
-  // Execute CSV Import
   const handleImportExecute = () => {
     if (!parseResult || parseResult.orders.length === 0) return;
 
@@ -669,7 +674,7 @@ export default function Dashboard() {
     }
   };
 
-  // Reconciliation & Category Breakdown
+  // Reconciliation Breakdown
   const reportCategoryBreakdown = useMemo(() => {
     const catMap = new Map<string, { ordered: number; dispatched: number; swaps: number; cashDelta: number }>();
 
@@ -704,15 +709,15 @@ export default function Dashboard() {
 
   return (
     <main className="app-wrapper">
-      {/* iOS Header (Matches HIG) */}
+      {/* iOS Header (Apple HIG with Full Widescreen Layout) */}
       <header className="ios-header">
         <div className="branding">
           <div className="pre-title">Fulfilled By Griphine</div>
           <h1>
-            {activeTab === 'fulfillment' && 'Fulfillment Tent'}
-            {activeTab === 'stock' && 'Stock & Allocation'}
-            {activeTab === 'importer' && 'CSV Importer'}
-            {activeTab === 'reports' && 'Reconciliation & Audit'}
+            {activeTab === 'fulfillment' && 'Log Sale & Dispatch Station'}
+            {activeTab === 'stock' && 'Master Stock & Allocation'}
+            {activeTab === 'importer' && 'CSV Orders Importer'}
+            {activeTab === 'reports' && 'Reconciliation & Audit Matrix'}
           </h1>
         </div>
 
@@ -758,13 +763,13 @@ export default function Dashboard() {
           onClick={() => setActiveTab('fulfillment')}
           className={`tab-btn ${activeTab === 'fulfillment' ? 'active' : ''}`}
         >
-          ⚡ Fulfillment
+          ⚡ Log & Dispatch
         </button>
         <button
           onClick={() => setActiveTab('stock')}
           className={`tab-btn ${activeTab === 'stock' ? 'active' : ''}`}
         >
-          📦 Stock & Dispatch
+          📦 Stock & Catalog
         </button>
         <button
           onClick={() => setActiveTab('importer')}
@@ -792,16 +797,12 @@ export default function Dashboard() {
             <div>
               <strong>{queueSize} offline transaction{queueSize > 1 ? 's' : ''} queued!</strong>
               <div style={{ fontSize: '11px', color: 'var(--label-secondary)' }}>
-                {syncStatusText || 'Saved locally in tent queue. Ready to sync to server.'}
+                {syncStatusText || 'Saved locally in tent queue. Ready to sync.'}
               </div>
             </div>
           </div>
           {isOnline && (
-            <button
-              onClick={handleManualSync}
-              className="btn green small"
-              disabled={isSyncing}
-            >
+            <button onClick={handleManualSync} className="btn green small" disabled={isSyncing}>
               {isSyncing ? 'Syncing...' : 'Sync Now'}
             </button>
           )}
@@ -809,375 +810,672 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: FULFILLMENT STATION */}
+      {/* TAB 1: LOG SALE & DISPATCH STATION (WIDESCREEN 2-COLUMN WORKHORSE) */}
       {/* ========================================================================= */}
       {activeTab === 'fulfillment' && (
-        <div>
-          {/* Event Metrics Card */}
-          <div className="section-title">Event Overview &middot; {activeLocation.name}</div>
-          <div className="event-metrics">
-            <div className="metric-item">
-              <span className="metric-lbl">Dispatched</span>
-              <span className="metric-val" style={{ color: 'var(--success)' }}>
-                {eventMetrics.fulfilledCount} / {eventMetrics.totalOrdersCount}
-              </span>
-            </div>
-            <div className="metric-item">
-              <span className="metric-lbl">Pending</span>
-              <span className="metric-val" style={{ color: 'var(--warning)' }}>
-                {eventMetrics.pendingCount}
-              </span>
-            </div>
-            <div className="metric-item">
-              <span className="metric-lbl">Cash Delta</span>
-              <span className="metric-val" style={{ color: 'var(--accent)' }}>
-                +{eventMetrics.totalCashDelta.toLocaleString()} KES
-              </span>
-            </div>
-            <div className="metric-item">
-              <span className="metric-lbl">Tent Stock</span>
-              <span className="metric-val" style={{ color: eventMetrics.eventStockTotal < 15 ? 'var(--destructive)' : 'var(--label-primary)' }}>
-                {eventMetrics.eventStockTotal} pcs
-              </span>
-            </div>
-          </div>
-
-          {/* Search Bar (iOS Inset) */}
-          <div className="search-container">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <input
-              type="text"
-              placeholder="Search 5-char code (e.g. 04CA7, JW6FU), SKU, customer..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="search-clear-btn">✕</button>
-            )}
-          </div>
-
-          {/* Actions & Filters */}
-          <div style={{ display: 'flex', gap: '8px', margin: '0 16px 12px 16px', alignItems: 'center' }}>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="tenant-selector"
-              style={{ flex: 1 }}
-            >
-              <option value="all">All Orders ({enrichedOrders.length})</option>
-              <option value="pending">Pending Pickup ({eventMetrics.pendingCount})</option>
-              <option value="fulfilled">Collected ({enrichedOrders.length - eventMetrics.pendingCount})</option>
-            </select>
-
-            <button
-              onClick={openWalkUpModal}
-              className="btn small"
-              style={{ flexShrink: 0, padding: '0 14px', height: '36px', fontSize: '13px' }}
-            >
-              + Walk-Up Sale
-            </button>
-          </div>
-
-          {/* COLLISION DISAMBIGUATION ALERT (Only on conflict) */}
-          {collisionMatches && (
-            <div className="collision-box">
-              <div className="collision-title">
-                <span>⚡ Code Collision: #{collisionMatches.collidingRef}</span>
-              </div>
-              <div className="collision-subtitle">
-                Multiple orders share this 5-character ID across different sources. Please select the matching customer:
+        <div className="main-grid">
+          {/* LEFT COLUMN: ORDER LOGGING & FULFILLMENT CARD */}
+          <div>
+            <div className="card" style={{ padding: '20px' }}>
+              <div className="card-title" style={{ fontSize: '17px', marginBottom: '16px' }}>
+                <span>⚡ Log Order & Dispatch Jersey</span>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent)' }}>
+                  🎪 {activeLocation.name.split(' ')[0]}
+                </span>
               </div>
 
-              <div className="collision-grid">
-                {collisionMatches.orders.map(cOrder => (
-                  <div key={cOrder.id} className="collision-card-item">
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <span className={`prefix-tag ${getPrefixClass(cOrder.source_prefix)}`}>
-                          {cOrder.source_prefix}-{cOrder.order_ref}
+              {/* Collision Alert if typed ref has duplicates */}
+              {typedCollision && (
+                <div className="collision-box" style={{ margin: '0 0 16px 0' }}>
+                  <div className="collision-title">
+                    <span>⚡ Collision: #{logOrderRef}</span>
+                  </div>
+                  <div className="collision-subtitle">
+                    Found {typedCollision.length} existing orders with this ID across channels:
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {typedCollision.map(c => (
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-screen)', padding: '6px 10px', borderRadius: '6px', fontSize: '12px' }}>
+                        <span>
+                          <strong className={`prefix-tag ${getPrefixClass(c.source_prefix)}`}>{c.source_prefix}</strong> #{c.order_ref} &middot; {c.customer_name || 'Walk-up'}
                         </span>
-                        <span style={{ fontWeight: 700, color: 'var(--label-primary)', fontSize: '13px' }}>
-                          {cOrder.amount_paid} KES
-                        </span>
+                        <span style={{ fontWeight: 700 }}>{c.amount_paid} KES</span>
                       </div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--label-primary)' }}>
-                        👤 {cOrder.customer_name || 'Walk-up Customer'}
-                      </div>
-                      {cOrder.customer_phone && (
-                        <div style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
-                          📞 {cOrder.customer_phone}
-                        </div>
-                      )}
-                      <div style={{ fontSize: '12px', color: 'var(--label-secondary)', marginTop: '4px' }}>
-                        👕 {cOrder.original_sku}
-                      </div>
-                    </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        onClick={() => handleFulfillExact(cOrder)}
-                        className="btn green small"
-                        style={{ flex: 1 }}
+              <form onSubmit={handleLogAndDispatch}>
+                <div className="form-group" style={{ margin: '0 0 14px 0' }}>
+                  {/* Field 1: Order ID Input */}
+                  <div className="form-row">
+                    <span className="row-label">Order ID</span>
+                    <div className="row-control" style={{ gap: '8px' }}>
+                      <select
+                        value={logPrefix}
+                        onChange={(e) => setLogPrefix(e.target.value)}
+                        style={{ width: 'auto', background: 'var(--bg-screen)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, textAlign: 'left' }}
+                        title="Prefix"
                       >
-                        ✓ Fulfill Exact
-                      </button>
-                      <button
-                        onClick={() => openSwapModal(cOrder)}
-                        className="btn secondary small"
-                      >
-                        ⇄ Swap
-                      </button>
+                        {prefixes.map(p => (
+                          <option key={p.prefix} value={p.prefix}>{p.prefix}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="5-char code (e.g. 04CA7, JW6FU)"
+                        value={logOrderRef}
+                        onChange={(e) => setLogOrderRef(e.target.value.toUpperCase())}
+                        style={{ fontFamily: 'monospace', fontSize: '16px', fontWeight: 700, letterSpacing: '1px' }}
+                        autoFocus
+                        required
+                      />
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
 
-          {/* Orders Grouped List */}
-          <div className="section-title">Matching Orders ({filteredOrders.length})</div>
-          {filteredOrders.length === 0 ? (
-            <div className="card">
-              <div className="result-empty">
-                No matching orders found.<br />
-                Search a 5-char code or tap <strong>+ Walk-Up Sale</strong>.
-              </div>
-            </div>
-          ) : (
-            <div className="list-group">
-              {filteredOrders.map(order => {
-                const isFulfilled = order.status === 'fulfilled';
-                const isSwap = order.fulfillment && order.fulfillment.actual_sku !== order.original_sku;
-                const [cat, col, sz] = order.original_sku.split('|');
+                  {/* Field 2: Category Selector */}
+                  <div className="form-row">
+                    <span className="row-label">Category</span>
+                    <div className="row-control">
+                      <select
+                        value={selectedCategory}
+                        onChange={(e) => handleCategoryChange(e.target.value)}
+                        required
+                      >
+                        {availableCategories.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
 
-                return (
-                  <div key={order.id} className="list-row">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
-                          {order.source_prefix}
-                        </span>
-                        <span style={{ fontFamily: 'monospace', fontSize: '15px', fontWeight: 700, color: 'var(--accent)' }}>
-                          #{order.order_ref}
-                        </span>
-                      </div>
+                  {/* Field 3: Color Selector */}
+                  <div className="form-row">
+                    <span className="row-label">Color</span>
+                    <div className="row-control">
+                      <select
+                        value={selectedColor}
+                        onChange={(e) => handleColorChange(e.target.value)}
+                        required
+                      >
+                        {availableColorsForSelectedCategory.map(col => (
+                          <option key={col} value={col}>{col}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
 
-                      <span className={`status-badge ${isFulfilled ? (isSwap ? 'status-Pending-Delivery' : 'status-Collected') : 'status-Uncollected'}`}>
-                        {isFulfilled ? (isSwap ? 'Swapped ✓' : 'Collected ✓') : 'Pending'}
+                  {/* Field 4: Size Selector with Live Stock Count Chips */}
+                  <div style={{ padding: '10px 18px 4px 18px', borderBottom: '0.5px solid var(--divider)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span className="row-label" style={{ width: 'auto' }}>Size Handed Over</span>
+                      <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
+                        Live Tent Stock
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '2px' }}>
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--label-primary)' }}>
-                          {cat} &middot; <span style={{ fontWeight: 400, color: 'var(--label-secondary)' }}>{col || 'None'}</span> &middot; <span style={{ fontWeight: 600, color: 'var(--accent)' }}>{sz || 'None'}</span>
-                        </div>
-                        <div style={{ fontSize: '12px', color: 'var(--label-secondary)', marginTop: '2px' }}>
-                          Paid: <strong>{order.amount_paid} KES</strong>
-                          {order.customer_name && ` &middot; 👤 ${order.customer_name}`}
-                          {order.customer_phone && ` (${order.customer_phone})`}
-                        </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', paddingBottom: '8px' }}>
+                      {availableSizesForSelectedCategoryColor.map(sz => {
+                        const targetSku = `${selectedCategory}|${selectedColor}|${sz}`;
+                        const stockRem = getStockRemainingAtLocation(targetSku);
+                        const isSelected = selectedSize === sz;
+                        const isOut = stockRem <= 0;
 
-                        {order.fulfillment && (
-                          <div style={{ fontSize: '12px', color: isSwap ? 'var(--accent)' : 'var(--success)', fontWeight: 600, marginTop: '4px' }}>
-                            ↳ Handed Over: {order.fulfillment.actual_sku} {order.fulfillment.cash_collected > 0 ? `(+${order.fulfillment.cash_collected} KES)` : ''}
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                        {!isFulfilled ? (
-                          <>
-                            <button
-                              onClick={() => handleFulfillExact(order)}
-                              className="btn green small"
-                            >
-                              ✓ Fulfill
-                            </button>
-                            <button
-                              onClick={() => openSwapModal(order)}
-                              className="btn secondary small"
-                            >
-                              ⇄ Swap
-                            </button>
-                          </>
-                        ) : (
-                          <span style={{ fontSize: '12px', color: 'var(--label-secondary)', fontWeight: 600 }}>
-                            Done
-                          </span>
-                        )}
-                      </div>
+                        return (
+                          <button
+                            key={sz}
+                            type="button"
+                            onClick={() => setSelectedSize(sz)}
+                            className={`size-pill-btn ${isSelected ? 'active' : ''} ${isOut ? 'out-of-stock' : ''}`}
+                          >
+                            <span>{sz}</span>
+                            <span className="size-stock-badge">
+                              {isOut ? 'Out' : `${stockRem} left`}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                );
-              })}
+
+                  {/* Field 5: Auto-Populated Amount Paid */}
+                  <div className="form-row">
+                    <span className="row-label">
+                      Amount (KES)
+                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--label-secondary)' }}>
+                        Auto from OG Stock
+                      </span>
+                    </span>
+                    <div className="row-control">
+                      <input
+                        type="number"
+                        value={logAmountPaid}
+                        onChange={(e) => setLogAmountPaid(e.target.value)}
+                        style={{ fontSize: '16px', fontWeight: 700, color: 'var(--label-primary)' }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Field 6: Upgrade Cash Delta (If customer pays extra) */}
+                  <div className="form-row">
+                    <span className="row-label">
+                      Extra Cash Delta
+                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--label-secondary)' }}>
+                        Upgrade collected
+                      </span>
+                    </span>
+                    <div className="row-control">
+                      <input
+                        type="number"
+                        placeholder="0"
+                        value={logCashCollected}
+                        onChange={(e) => setLogCashCollected(e.target.value)}
+                        style={{ fontSize: '15px', fontWeight: 600, color: 'var(--accent)' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Optional Delivery & Buyer Details Accordion */}
+                <div style={{ marginBottom: '16px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowOptionalDetails(!showOptionalDetails)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent)',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: 0
+                    }}
+                  >
+                    <span>{showOptionalDetails ? '▼ Hide Customer & Delivery Details' : '▶ + Add Buyer Name / Delivery Destination (Optional)'}</span>
+                  </button>
+
+                  {showOptionalDetails && (
+                    <div className="form-group" style={{ margin: '10px 0 0 0' }}>
+                      <div className="form-row">
+                        <span className="row-label">Buyer Name</span>
+                        <div className="row-control">
+                          <input
+                            type="text"
+                            placeholder="e.g. John Doe"
+                            value={logCustomerName}
+                            onChange={(e) => setLogCustomerName(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="form-row">
+                        <span className="row-label">Phone Number</span>
+                        <div className="row-control">
+                          <input
+                            type="tel"
+                            placeholder="e.g. 0712345678"
+                            value={logCustomerPhone}
+                            onChange={(e) => setLogCustomerPhone(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="form-row">
+                        <span className="row-label">Destination</span>
+                        <div className="row-control">
+                          <input
+                            type="text"
+                            placeholder="e.g. Nakuru / Pickup"
+                            value={logDestination}
+                            onChange={(e) => setLogDestination(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="form-row">
+                        <span className="row-label">Payment Channel</span>
+                        <div className="row-control">
+                          <select
+                            value={logChannel}
+                            onChange={(e) => setLogChannel(e.target.value as any)}
+                          >
+                            <option value="Event">Event Tent (M-Pesa / Cash)</option>
+                            <option value="Card">Card Terminal</option>
+                            <option value="Online">Online Pre-order</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="form-row vertical">
+                        <label>Notes / Delivery Instructions</label>
+                        <textarea
+                          rows={2}
+                          placeholder="e.g. Package with extra sticker..."
+                          value={logNotes}
+                          onChange={(e) => setLogNotes(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Submit 1-Tap Fulfillment Button */}
+                <button
+                  type="submit"
+                  className="btn green block"
+                  style={{ height: '48px', fontSize: '15px', fontWeight: 700 }}
+                  disabled={isPending}
+                >
+                  ⚡ Log Sale & Dispatch Jersey (1-Click)
+                </button>
+              </form>
             </div>
-          )}
+          </div>
+
+          {/* RIGHT COLUMN: LIVE STOCK MATRIX & RECENT DISPATCHES */}
+          <div>
+            {/* KPI Summary Tiles */}
+            <div className="event-metrics" style={{ margin: '0 0 16px 0' }}>
+              <div className="metric-item">
+                <span className="metric-lbl">Dispatched</span>
+                <span className="metric-val" style={{ color: 'var(--success)' }}>
+                  {eventMetrics.fulfilledCount} pcs
+                </span>
+              </div>
+              <div className="metric-item">
+                <span className="metric-lbl">Pending Pickup</span>
+                <span className="metric-val" style={{ color: 'var(--warning)' }}>
+                  {eventMetrics.pendingCount}
+                </span>
+              </div>
+              <div className="metric-item">
+                <span className="metric-lbl">Upgrade Cash</span>
+                <span className="metric-val" style={{ color: 'var(--accent)' }}>
+                  +{eventMetrics.totalCashDelta.toLocaleString()} KES
+                </span>
+              </div>
+              <div className="metric-item">
+                <span className="metric-lbl">Physical Stock</span>
+                <span className="metric-val" style={{ color: eventMetrics.eventStockTotal < 15 ? 'var(--destructive)' : 'var(--label-primary)' }}>
+                  {eventMetrics.eventStockTotal} pcs
+                </span>
+              </div>
+            </div>
+
+            {/* Live Stock on Hand at this Location */}
+            <div className="card" style={{ margin: '0 0 16px 0', padding: '16px' }}>
+              <div className="card-title">
+                <span>📦 Live Tent Stock Availability</span>
+                <span style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>Click size to quick-fill form</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {availableCategories.map(cat => {
+                  const catItems = stockOnHand.filter(s => s.location_id === selectedLocationId && s.category === cat);
+                  if (catItems.length === 0) return null;
+
+                  // Group by color
+                  const colors = [...new Set(catItems.map(c => c.color || 'Standard'))];
+
+                  return (
+                    <div key={cat} style={{ background: 'var(--bg-screen)', borderRadius: '10px', padding: '10px 12px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--label-primary)', marginBottom: '6px' }}>
+                        {cat}
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {colors.map(col => {
+                          const colItems = catItems.filter(c => (c.color || 'Standard') === col);
+
+                          return (
+                            <div key={col} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '12px', color: 'var(--label-secondary)', minWidth: '70px' }}>
+                                {col}:
+                              </span>
+
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                {colItems.map(item => {
+                                  const isZero = item.stock_on_hand <= 0;
+                                  const isLow = item.stock_on_hand <= item.low_stock_threshold && !isZero;
+
+                                  return (
+                                    <button
+                                      key={item.sku}
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedCategory(cat);
+                                        setSelectedColor(col);
+                                        setSelectedSize(item.size || 'None');
+                                      }}
+                                      style={{
+                                        border: 'none',
+                                        background: isZero ? 'rgba(255,59,48,0.1)' : isLow ? 'rgba(255,149,0,0.15)' : '#FFFFFF',
+                                        color: isZero ? 'var(--destructive)' : isLow ? 'var(--warning)' : 'var(--label-primary)',
+                                        padding: '4px 8px',
+                                        borderRadius: '6px',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        cursor: 'pointer'
+                                      }}
+                                      title="Click to fill order form"
+                                    >
+                                      {item.size || 'Standard'}: <strong>{item.stock_on_hand}</strong>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Recent Dispatches Feed */}
+            <div className="card" style={{ padding: '16px' }}>
+              <div className="card-title">
+                <span>🕒 Recent Dispatches Today</span>
+                <input
+                  type="text"
+                  placeholder="Filter recent..."
+                  value={recentSearchQuery}
+                  onChange={(e) => setRecentSearchQuery(e.target.value)}
+                  style={{ width: '130px', fontSize: '12px', background: 'var(--bg-screen)', padding: '4px 8px', borderRadius: '6px', border: 'none' }}
+                />
+              </div>
+
+              {recentFulfillmentsAtLocation.length === 0 ? (
+                <div className="result-empty">No dispatches logged today at this station yet.</div>
+              ) : (
+                <div className="list-group" style={{ margin: 0, boxShadow: 'none' }}>
+                  {recentFulfillmentsAtLocation.map(order => {
+                    const isSwap = order.fulfillment && order.fulfillment.actual_sku !== order.original_sku;
+
+                    return (
+                      <div key={order.id} className="list-row" style={{ padding: '8px 12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
+                              {order.source_prefix}
+                            </span>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
+                              #{order.order_ref}
+                            </span>
+                            <span style={{ fontSize: '12px', fontWeight: 600 }}>
+                              {order.customer_name || 'Walk-up'}
+                            </span>
+                          </div>
+
+                          <span className={`status-badge ${isSwap ? 'status-Pending-Delivery' : 'status-Collected'}`}>
+                            {isSwap ? 'Swapped ✓' : 'Dispatched ✓'}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                          <div style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
+                            👕 {order.fulfillment?.actual_sku || order.original_sku} &middot; {order.amount_paid} KES
+                            {order.fulfillment && order.fulfillment.cash_collected > 0 && ` (+${order.fulfillment.cash_collected} KES)`}
+                          </div>
+
+                          <button
+                            onClick={() => openSwapModal(order)}
+                            className="btn secondary small"
+                            style={{ fontSize: '11px', height: '24px', padding: '2px 8px' }}
+                          >
+                            ⇄ Swap / Fix
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: STOCK & ALLOCATION */}
+      {/* TAB 2: MASTER STOCK & CATALOG (ADMINS) */}
       {/* ========================================================================= */}
       {activeTab === 'stock' && (
-        <div>
-          <div className="section-title">Derived Stock on Hand</div>
-          <div className="card" style={{ padding: '8px 0' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 16px 8px 16px' }}>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="tenant-selector"
-              >
-                <option value="all">All Categories</option>
-                <option value="Fan Jersey">Fan Jerseys</option>
-                <option value="Crew Neck">Crew Necks</option>
-                <option value="KRU Replica">KRU Replicas</option>
-                <option value="Bucket Hat">Bucket Hats</option>
-                <option value="Tank Top">Tank Tops</option>
-              </select>
-            </div>
+        <div className="two-col-grid">
+          {/* Left Column: Admin Catalog Manager & OG Pricing */}
+          <div>
+            <div className="card">
+              <div className="card-title">
+                <span>👕 Admin SKU Catalog & OG Pricing</span>
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '14px' }}>
+                Define sellable jersey categories, sizes, and baseline prices. These prices automatically populate when staff log orders at tents.
+              </p>
 
-            <table className="stock-table">
-              <thead>
-                <tr>
-                  <th>Location</th>
-                  <th>SKU Code</th>
-                  <th>Price</th>
-                  <th style={{ textAlign: 'right' }}>Stock</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stockOnHand
-                  .filter(s => categoryFilter === 'all' || s.category === categoryFilter)
-                  .map((item, idx) => (
-                    <tr key={`${item.location_id}-${item.sku}-${idx}`}>
-                      <td style={{ fontSize: '13px', fontWeight: 600 }}>
-                        {item.location_type === 'warehouse' ? '🏢 ' : '🎪 '}
-                        {item.location_name.split(' ')[0]}
-                      </td>
-                      <td style={{ fontFamily: 'monospace', fontSize: '13px' }}>
-                        {item.sku}
-                      </td>
-                      <td style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
-                        {item.price} KES
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <span className={`stock-badge ${item.stock_on_hand <= 0 ? 'zero' : item.stock_on_hand <= item.low_stock_threshold ? 'low' : 'remaining'}`}>
-                          {item.stock_on_hand} pcs
-                        </span>
-                      </td>
+              <form onSubmit={handleSaveCatalogItem} className="form-group" style={{ margin: '0 0 16px 0' }}>
+                <div className="form-row">
+                  <span className="row-label">Category</span>
+                  <div className="row-control">
+                    <input
+                      type="text"
+                      placeholder="e.g. Fan Jersey"
+                      value={newCatalogCategory}
+                      onChange={(e) => setNewCatalogCategory(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">Color</span>
+                  <div className="row-control">
+                    <input
+                      type="text"
+                      placeholder="e.g. White / Red / Navy"
+                      value={newCatalogColor}
+                      onChange={(e) => setNewCatalogColor(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">Size</span>
+                  <div className="row-control">
+                    <input
+                      type="text"
+                      placeholder="e.g. S, M, L, XL, XXL"
+                      value={newCatalogSize}
+                      onChange={(e) => setNewCatalogSize(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">OG Catalog Price (KES)</span>
+                  <div className="row-control">
+                    <input
+                      type="number"
+                      value={newCatalogPrice}
+                      onChange={(e) => setNewCatalogPrice(parseInt(e.target.value, 10) || 0)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">Low Stock Threshold</span>
+                  <div className="row-control">
+                    <input
+                      type="number"
+                      value={newCatalogThreshold}
+                      onChange={(e) => setNewCatalogThreshold(parseInt(e.target.value, 10) || 0)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: '12px 18px' }}>
+                  <button type="submit" className="btn green block" disabled={isPending}>
+                    {isPending ? 'Saving...' : '+ Add / Update Catalog SKU & Price'}
+                  </button>
+                </div>
+              </form>
+
+              {/* Catalog Items Table */}
+              <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+                <table className="stock-table">
+                  <thead>
+                    <tr>
+                      <th>SKU</th>
+                      <th>Category</th>
+                      <th>Variant</th>
+                      <th style={{ textAlign: 'right' }}>Price</th>
                     </tr>
-                  ))}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {catalog.map(c => (
+                      <tr key={c.sku}>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{c.sku}</td>
+                        <td>{c.category}</td>
+                        <td>{c.color || 'Standard'} / {c.size || 'None'}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>
+                          {c.price} KES
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
-          {/* Warehouse Stock-In Form */}
-          <div className="section-title">1. Warehouse Stock-In</div>
-          <form onSubmit={handleStockInSubmit} className="form-group">
-            <div className="form-row">
-              <span className="row-label">SKU</span>
-              <div className="row-control">
-                <select value={stockInSku} onChange={(e) => setStockInSku(e.target.value)} required>
-                  {catalog.map(c => (
-                    <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
-                  ))}
-                </select>
+          {/* Right Column: Warehouse Stock Operations */}
+          <div>
+            {/* 1. Log Warehouse Stock-In */}
+            <div className="card" style={{ marginBottom: '16px' }}>
+              <div className="card-title">
+                <span>📥 1. Log Warehouse Stock-In</span>
               </div>
+              <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
+                Record incoming deliveries from suppliers into Main Warehouse stock.
+              </p>
+              <form onSubmit={handleStockInSubmit} className="form-group" style={{ margin: 0 }}>
+                <div className="form-row">
+                  <span className="row-label">Select SKU</span>
+                  <div className="row-control">
+                    <select value={stockInSku} onChange={(e) => setStockInSku(e.target.value)} required>
+                      {catalog.map(c => (
+                        <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">Quantity</span>
+                  <div className="row-control">
+                    <input
+                      type="number"
+                      min="1"
+                      value={stockInQty}
+                      onChange={(e) => setStockInQty(parseInt(e.target.value, 10) || 0)}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <span className="row-label">Supplier Notes</span>
+                  <div className="row-control">
+                    <input
+                      type="text"
+                      value={stockInNotes}
+                      onChange={(e) => setStockInNotes(e.target.value)}
+                      placeholder="e.g. Official SportPesa Batch #1"
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: '12px 18px' }}>
+                  <button type="submit" className="btn green block" disabled={isPending}>
+                    {isPending ? 'Recording...' : 'Record Warehouse Stock-In'}
+                  </button>
+                </div>
+              </form>
             </div>
 
-            <div className="form-row">
-              <span className="row-label">Quantity</span>
-              <div className="row-control">
-                <input
-                  type="number"
-                  min="1"
-                  value={stockInQty}
-                  onChange={(e) => setStockInQty(parseInt(e.target.value, 10) || 0)}
-                  required
-                />
+            {/* 2. Stock Transfer to Event Tent */}
+            <div className="card">
+              <div className="card-title">
+                <span>🚚 2. Stock Transfer to Event Tent</span>
               </div>
-            </div>
+              <p style={{ fontSize: '12px', color: 'var(--label-secondary)', marginBottom: '12px' }}>
+                Allocate merchandise from Main Warehouse to a specific event tent.
+              </p>
+              <form onSubmit={handleTransferSubmit} className="form-group" style={{ margin: 0 }}>
+                <div className="form-row">
+                  <span className="row-label">Select SKU</span>
+                  <div className="row-control">
+                    <select value={transferSku} onChange={(e) => setTransferSku(e.target.value)} required>
+                      {catalog.map(c => (
+                        <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-            <div className="form-row">
-              <span className="row-label">Notes</span>
-              <div className="row-control">
-                <input
-                  type="text"
-                  value={stockInNotes}
-                  onChange={(e) => setStockInNotes(e.target.value)}
-                  placeholder="e.g. SportPesa Batch #1"
-                />
-              </div>
-            </div>
+                <div className="form-row">
+                  <span className="row-label">Destination</span>
+                  <div className="row-control">
+                    <select value={transferDestLocation} onChange={(e) => setTransferDestLocation(e.target.value)} required>
+                      {locations.filter(l => l.type === 'event').map(l => (
+                        <option key={l.id} value={l.id}>🎪 {l.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-            <div style={{ padding: '12px 16px' }}>
-              <button type="submit" className="btn green" style={{ width: '100%', margin: 0 }} disabled={isPending}>
-                {isPending ? 'Recording...' : 'Add Stock to Warehouse'}
-              </button>
-            </div>
-          </form>
+                <div className="form-row">
+                  <span className="row-label">Quantity</span>
+                  <div className="row-control">
+                    <input
+                      type="number"
+                      min="1"
+                      value={transferQty}
+                      onChange={(e) => setTransferQty(parseInt(e.target.value, 10) || 0)}
+                      required
+                    />
+                  </div>
+                </div>
 
-          {/* Stock Transfer to Event Form */}
-          <div className="section-title">2. Allocate Stock to Event Tent</div>
-          <form onSubmit={handleTransferSubmit} className="form-group">
-            <div className="form-row">
-              <span className="row-label">SKU to Transfer</span>
-              <div className="row-control">
-                <select value={transferSku} onChange={(e) => setTransferSku(e.target.value)} required>
-                  {catalog.map(c => (
-                    <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+                <div className="form-row">
+                  <span className="row-label">Dispatch Notes</span>
+                  <div className="row-control">
+                    <input
+                      type="text"
+                      value={transferNotes}
+                      onChange={(e) => setTransferNotes(e.target.value)}
+                      placeholder="e.g. Tent initial allocation"
+                    />
+                  </div>
+                </div>
 
-            <div className="form-row">
-              <span className="row-label">Destination</span>
-              <div className="row-control">
-                <select value={transferDestLocation} onChange={(e) => setTransferDestLocation(e.target.value)} required>
-                  {locations.filter(l => l.type === 'event').map(l => (
-                    <option key={l.id} value={l.id}>🎪 {l.name}</option>
-                  ))}
-                </select>
-              </div>
+                <div style={{ padding: '12px 18px' }}>
+                  <button type="submit" className="btn block" disabled={isPending}>
+                    {isPending ? 'Allocating...' : 'Dispatch to Event Tent'}
+                  </button>
+                </div>
+              </form>
             </div>
-
-            <div className="form-row">
-              <span className="row-label">Quantity</span>
-              <div className="row-control">
-                <input
-                  type="number"
-                  min="1"
-                  value={transferQty}
-                  onChange={(e) => setTransferQty(parseInt(e.target.value, 10) || 0)}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="form-row">
-              <span className="row-label">Notes</span>
-              <div className="row-control">
-                <input
-                  type="text"
-                  value={transferNotes}
-                  onChange={(e) => setTransferNotes(e.target.value)}
-                  placeholder="e.g. Tent replenishment"
-                />
-              </div>
-            </div>
-
-            <div style={{ padding: '12px 16px' }}>
-              <button type="submit" className="btn" style={{ width: '100%', margin: 0 }} disabled={isPending}>
-                {isPending ? 'Allocating...' : 'Dispatch to Event Tent'}
-              </button>
-            </div>
-          </form>
+          </div>
         </div>
       )}
 
@@ -1185,11 +1483,17 @@ export default function Dashboard() {
       {/* TAB 3: CSV IMPORTER */}
       {/* ========================================================================= */}
       {activeTab === 'importer' && (
-        <div>
-          <div className="section-title">Ingest Shop Orders</div>
-          <div className="form-group">
+        <div className="full-width-card card">
+          <div className="card-title">
+            <span>📥 Batch CSV Orders Ingest</span>
+          </div>
+          <p style={{ fontSize: '13px', color: 'var(--label-secondary)', marginBottom: '16px' }}>
+            Upload CSV exports from TikoHub or Shopify. The system dynamically splits on the first <code>-</code> to capture prefixes (<code>ORD</code>, <code>SH</code>, <code>TKH</code>), truncates the ID to 5 characters, expands multi-unit rows, and registers new prefixes automatically.
+          </p>
+
+          <div className="form-group" style={{ margin: '0 0 16px 0' }}>
             <div className="form-row vertical">
-              <label htmlFor="csv-file-input">Select TikoHub / Shopify CSV Export</label>
+              <label htmlFor="csv-file-input">Select CSV Export File</label>
               <input
                 id="csv-file-input"
                 type="file"
@@ -1202,8 +1506,7 @@ export default function Dashboard() {
 
           {parseResult && (
             <>
-              <div className="section-title">Parsing Metrics</div>
-              <div className="event-metrics">
+              <div className="event-metrics" style={{ margin: '0 0 16px 0' }}>
                 <div className="metric-item">
                   <span className="metric-lbl">Orders Identified</span>
                   <span className="metric-val">{parseResult.totalOrders}</span>
@@ -1213,37 +1516,24 @@ export default function Dashboard() {
                   <span className="metric-val" style={{ color: 'var(--accent)' }}>{parseResult.totalUnits}</span>
                 </div>
                 <div className="metric-item">
-                  <span className="metric-lbl">Prefixes</span>
+                  <span className="metric-lbl">Discovered Prefixes</span>
                   <span className="metric-val">{parseResult.discoveredPrefixes.join(', ') || 'ORD'}</span>
                 </div>
               </div>
 
-              {parseResult.errors.length > 0 && (
-                <div className="alert-banner" style={{ borderLeftColor: 'var(--destructive)' }}>
-                  <div>
-                    <strong>Validation Warnings ({parseResult.errors.length}):</strong>
-                    <ul style={{ paddingLeft: '16px', marginTop: '4px', fontSize: '12px' }}>
-                      {parseResult.errors.map((e, idx) => (
-                        <li key={idx}>{e}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-
-              <div className="section-title">Preview (First 5 Rows)</div>
-              <div className="card" style={{ padding: '8px 0' }}>
+              <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
                 <table className="stock-table">
                   <thead>
                     <tr>
                       <th>Prefix & Ref</th>
                       <th>SKU</th>
                       <th>Paid</th>
-                      <th>Unit</th>
+                      <th>Customer</th>
+                      <th>Unit Index</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {parseResult.orders.slice(0, 5).map((o, idx) => (
+                    {parseResult.orders.map((o, idx) => (
                       <tr key={idx}>
                         <td>
                           <span className={`prefix-tag ${getPrefixClass(o.source_prefix)}`}>
@@ -1255,7 +1545,8 @@ export default function Dashboard() {
                         </td>
                         <td>{o.original_sku}</td>
                         <td>{o.amount_paid} KES</td>
-                        <td>{o.unit_index}/{o.total_units}</td>
+                        <td>{o.customer_name || 'N/A'}</td>
+                        <td>Unit {o.unit_index} of {o.total_units}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1264,7 +1555,7 @@ export default function Dashboard() {
 
               <button
                 onClick={handleImportExecute}
-                className="btn green"
+                className="btn green block"
                 disabled={isPending || parseResult.orders.length === 0}
               >
                 {isPending ? 'Importing...' : `Write ${parseResult.orders.length} Orders to Database`}
@@ -1275,20 +1566,22 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 4: RECONCILIATION & AUDIT */}
+      {/* TAB 4: RECONCILIATION & AUDIT MATRIX */}
       {/* ========================================================================= */}
       {activeTab === 'reports' && (
-        <div>
-          <div className="section-title">Category Sales Breakdown</div>
-          <div className="card" style={{ padding: '8px 0' }}>
+        <div className="full-width-card">
+          <div className="card" style={{ marginBottom: '16px' }}>
+            <div className="card-title">
+              <span>📊 Merchandise Category Reconciliation</span>
+            </div>
             <table className="stock-table">
               <thead>
                 <tr>
-                  <th>Category</th>
-                  <th>Ordered</th>
-                  <th>Sent</th>
-                  <th>Swaps</th>
-                  <th>Cash Delta</th>
+                  <th>Merchandise Category</th>
+                  <th>Total Ordered</th>
+                  <th>Total Dispatched</th>
+                  <th>Swaps / Upgrades</th>
+                  <th>Upgrade Cash Delta</th>
                 </tr>
               </thead>
               <tbody>
@@ -1297,7 +1590,7 @@ export default function Dashboard() {
                     <td style={{ fontWeight: 600 }}>{row.category}</td>
                     <td>{row.ordered} pcs</td>
                     <td style={{ color: 'var(--success)', fontWeight: 600 }}>{row.dispatched} pcs</td>
-                    <td>{row.swaps}</td>
+                    <td>{row.swaps} swaps</td>
                     <td style={{ fontWeight: 700, color: 'var(--accent)' }}>
                       +{row.cashDelta.toLocaleString()} KES
                     </td>
@@ -1307,55 +1600,70 @@ export default function Dashboard() {
             </table>
           </div>
 
-          <div className="section-title">Ordered vs. What Went Out (Audit Matrix)</div>
-          <div className="card" style={{ padding: '8px 0' }}>
-            <table className="stock-table">
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Customer</th>
-                  <th>Ordered</th>
-                  <th>Dispatched</th>
-                  <th>Delta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {enrichedOrders.map(order => {
-                  const isFulfilled = !!order.fulfillment;
-                  const isSwap = isFulfilled && order.fulfillment?.actual_sku !== order.original_sku;
+          <div className="card" style={{ marginBottom: '16px' }}>
+            <div className="card-title">
+              <span>🎯 Ordered vs. What Went Out (Audit Matrix)</span>
+            </div>
+            <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
+              <table className="stock-table">
+                <thead>
+                  <tr>
+                    <th>Order Ref</th>
+                    <th>Customer</th>
+                    <th>Ordered SKU</th>
+                    <th>Handed Over</th>
+                    <th>Cash Delta</th>
+                    <th>Location</th>
+                    <th>Staff</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {enrichedOrders.map(order => {
+                    const isFulfilled = !!order.fulfillment;
+                    const isSwap = isFulfilled && order.fulfillment?.actual_sku !== order.original_sku;
 
-                  return (
-                    <tr key={order.id}>
-                      <td>
-                        <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
-                          {order.source_prefix}
-                        </span>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 700, marginLeft: '4px' }}>
-                          #{order.order_ref}
-                        </span>
-                      </td>
-                      <td>{order.customer_name || 'Walk-up'}</td>
-                      <td style={{ fontSize: '12px' }}>{order.original_sku}</td>
-                      <td style={{ fontSize: '12px', fontWeight: 600, color: isSwap ? 'var(--accent)' : 'var(--label-primary)' }}>
-                        {order.fulfillment?.actual_sku || '—'}
-                      </td>
-                      <td style={{ fontWeight: 600, color: order.fulfillment?.cash_collected ? 'var(--accent)' : 'var(--label-secondary)' }}>
-                        {order.fulfillment?.cash_collected ? `+${order.fulfillment.cash_collected} KES` : '0'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                    return (
+                      <tr key={order.id}>
+                        <td>
+                          <span className={`prefix-tag ${getPrefixClass(order.source_prefix)}`}>
+                            {order.source_prefix}
+                          </span>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700, marginLeft: '4px' }}>
+                            #{order.order_ref}
+                          </span>
+                        </td>
+                        <td>{order.customer_name || 'Walk-up'}</td>
+                        <td style={{ fontSize: '12px' }}>{order.original_sku}</td>
+                        <td style={{ fontSize: '12px', fontWeight: 600, color: isSwap ? 'var(--accent)' : 'var(--label-primary)' }}>
+                          {order.fulfillment?.actual_sku || '—'}
+                        </td>
+                        <td style={{ fontWeight: 600, color: order.fulfillment?.cash_collected ? 'var(--accent)' : 'var(--label-secondary)' }}>
+                          {order.fulfillment?.cash_collected ? `+${order.fulfillment.cash_collected} KES` : '0'}
+                        </td>
+                        <td>
+                          {order.fulfillment ? (locations.find(l => l.id === order.fulfillment?.location_id)?.name.split(' ')[0] || order.fulfillment?.location_id) : '—'}
+                        </td>
+                        <td style={{ fontSize: '12px', color: 'var(--label-secondary)' }}>
+                          {order.fulfillment?.staff_id || '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          <div className="section-title">Data Source Prefixes</div>
-          <div className="card" style={{ padding: '8px 0' }}>
+          <div className="card" style={{ marginBottom: '16px' }}>
+            <div className="card-title">
+              <span>⚙️ Dynamic Order Prefixes (Config Table)</span>
+            </div>
             <table className="stock-table">
               <thead>
                 <tr>
                   <th>Prefix</th>
-                  <th>Channel Label</th>
+                  <th>Channel Description</th>
+                  <th>Status</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -1380,6 +1688,9 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td>
+                      <span className="stock-badge remaining">Active</span>
+                    </td>
+                    <td>
                       {editingPrefix === p.prefix ? (
                         <button onClick={() => handleSavePrefixLabel(p.prefix)} className="btn green small">
                           Save
@@ -1392,42 +1703,10 @@ export default function Dashboard() {
                           }}
                           className="btn secondary small"
                         >
-                          Edit
+                          Edit Label
                         </button>
                       )}
                     </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="section-title">Stock Movement Ledger Log</div>
-          <div className="card" style={{ padding: '8px 0', maxHeight: '300px', overflowY: 'auto' }}>
-            <table className="stock-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Type</th>
-                  <th>SKU</th>
-                  <th>Qty</th>
-                  <th>Staff</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ledger.map(row => (
-                  <tr key={row.id}>
-                    <td style={{ fontSize: '11px', color: 'var(--label-secondary)' }}>
-                      {new Date(row.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </td>
-                    <td style={{ fontSize: '11px', fontWeight: 700, color: row.type === 'StockIn' ? 'var(--success)' : row.type === 'Transfer' ? 'var(--accent)' : 'var(--warning)' }}>
-                      {row.type}
-                    </td>
-                    <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{row.sku}</td>
-                    <td style={{ fontWeight: 700, color: row.quantity_delta > 0 ? 'var(--success)' : 'var(--destructive)' }}>
-                      {row.quantity_delta > 0 ? `+${row.quantity_delta}` : row.quantity_delta}
-                    </td>
-                    <td style={{ fontSize: '11px', color: 'var(--label-secondary)' }}>{row.staff_id}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1440,14 +1719,14 @@ export default function Dashboard() {
               Reset orders, fulfillments, and stock movements to clean standard seeds.
             </p>
             <button onClick={handleDbReset} className="btn danger small">
-              Reset Database
+              Reset Database to Standard Seeds
             </button>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: SWAP SKU (iOS Bottom Sheet) */}
+      {/* MODAL: SWAP SKU (iOS Centered Sheet) */}
       {/* ========================================================================= */}
       {swapModalOpen && swapOrder && (
         <div className="modal">
@@ -1471,7 +1750,7 @@ export default function Dashboard() {
                 </span>
               </div>
               <div className="form-row">
-                <span className="row-label">Replacement</span>
+                <span className="row-label">Replacement SKU</span>
                 <div className="row-control">
                   <select
                     value={selectedSwapSku}
@@ -1522,19 +1801,6 @@ export default function Dashboard() {
               )}
 
               <div className="form-row">
-                <span className="row-label">Channel</span>
-                <div className="row-control">
-                  <select
-                    value={swapChannel}
-                    onChange={(e) => setSwapChannel(e.target.value as any)}
-                  >
-                    <option value="Event">Event Tent (M-Pesa / Cash)</option>
-                    <option value="Card">PDQ Terminal Card Payment</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-row">
                 <span className="row-label">Notes</span>
                 <div className="row-control">
                   <input
@@ -1547,121 +1813,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <button onClick={handleSwapSubmit} className="btn" style={{ width: '100%', margin: 0 }}>
-              Confirm Swap & Hand Over
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL: WALK-UP DIRECT SALE (iOS Bottom Sheet) */}
-      {/* ========================================================================= */}
-      {walkUpModalOpen && (
-        <div className="modal">
-          <div className="modal-content">
-            <div className="card-title">
-              <span>⚡ Walk-Up Direct Sale</span>
-              <button onClick={() => setWalkUpModalOpen(false)} className="btn small secondary">Cancel</button>
-            </div>
-
-            <div className="form-group" style={{ margin: '0 0 16px 0' }}>
-              <div className="form-row">
-                <span className="row-label">Source Prefix</span>
-                <div className="row-control">
-                  <select value={walkUpPrefix} onChange={(e) => setWalkUpPrefix(e.target.value)}>
-                    {prefixes.map(p => (
-                      <option key={p.prefix} value={p.prefix}>{p.prefix}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Order Code</span>
-                <div className="row-control">
-                  <input
-                    type="text"
-                    placeholder="5-char code (e.g. 04CA7)"
-                    value={walkUpRef}
-                    onChange={(e) => setWalkUpRef(e.target.value.toUpperCase())}
-                    autoFocus
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Ordered SKU</span>
-                <div className="row-control">
-                  <select value={walkUpOrigSku} onChange={(e) => handleWalkUpOrigSkuChange(e.target.value)}>
-                    {catalog.map(c => (
-                      <option key={c.sku} value={c.sku}>{c.sku} — {c.price} KES</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Handed Over</span>
-                <div className="row-control">
-                  <select value={walkUpActualSku} onChange={(e) => handleWalkUpActualSkuChange(e.target.value)}>
-                    {catalog.map(c => (
-                      <option key={c.sku} value={c.sku}>{c.sku} — {c.price} KES</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Paid (KES)</span>
-                <div className="row-control">
-                  <input
-                    type="number"
-                    value={walkUpPaid}
-                    onChange={(e) => setWalkUpPaid(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Cash Delta</span>
-                <div className="row-control">
-                  <input
-                    type="number"
-                    value={walkUpCashDelta}
-                    onChange={(e) => setWalkUpCashDelta(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Customer</span>
-                <div className="row-control">
-                  <input
-                    type="text"
-                    placeholder="Name (Optional)"
-                    value={walkUpCustomerName}
-                    onChange={(e) => setWalkUpCustomerName(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-row">
-                <span className="row-label">Phone</span>
-                <div className="row-control">
-                  <input
-                    type="text"
-                    placeholder="07XXXXXXXX"
-                    value={walkUpCustomerPhone}
-                    onChange={(e) => setWalkUpCustomerPhone(e.target.value)}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <button onClick={handleWalkUpSubmit} className="btn green" style={{ width: '100%', margin: 0 }}>
-              Log Sale & Hand Over
+            <button onClick={handleSwapSubmit} className="btn green block">
+              Confirm Swap & Dispatch
             </button>
           </div>
         </div>
@@ -1669,7 +1822,7 @@ export default function Dashboard() {
 
       {/* Footer */}
       <footer className="footer-bar">
-        Fulfilled By Griphine &middot; Append-Only Ledger &middot; Apple HIG System
+        Fulfilled By Griphine &middot; Direct Order Logging & Multi-Tenant Event Dispatch &middot; Apple HIG System
       </footer>
     </main>
   );

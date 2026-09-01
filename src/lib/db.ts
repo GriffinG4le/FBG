@@ -272,6 +272,36 @@ export async function getCatalog(): Promise<CatalogItem[]> {
   return memoryCatalog;
 }
 
+export async function upsertCatalogItem(item: CatalogItem): Promise<void> {
+  try {
+    await supabase.from('catalog').upsert({
+      sku: item.sku,
+      category: item.category,
+      color: item.color,
+      size: item.size,
+      price: item.price,
+      low_stock_threshold: item.low_stock_threshold
+    });
+  } catch (e) {
+    console.warn("Supabase catalog upsert failed, updating memory store:", e);
+  }
+  const idx = memoryCatalog.findIndex(c => c.sku === item.sku);
+  if (idx !== -1) {
+    memoryCatalog[idx] = item;
+  } else {
+    memoryCatalog.push(item);
+  }
+}
+
+export async function deleteCatalogItem(sku: string): Promise<void> {
+  try {
+    await supabase.from('catalog').delete().eq('sku', sku);
+  } catch (e) {
+    console.warn("Supabase catalog delete failed, updating memory store:", e);
+  }
+  memoryCatalog = memoryCatalog.filter(c => c.sku !== sku);
+}
+
 // ==============================================================================
 // Derived Stock on Hand
 // ==============================================================================
@@ -634,69 +664,105 @@ export async function quickWalkUpFulfill(params: {
   staffId: string;
   customerName?: string | null;
   customerPhone?: string | null;
-  channel?: 'Event' | 'Card' | 'Manual';
+  channel?: 'Online' | 'Event' | 'Card' | 'Manual';
   notes?: string | null;
 }): Promise<{ order: Order; fulfillment: Fulfillment; ledgerRow: LedgerRow }> {
   await ensureSkuExists(params.originalSku);
   await ensureSkuExists(params.actualSku);
 
   const sourcePrefix = params.sourcePrefix || 'MANUAL';
+  const cleanRef = params.orderRef.toUpperCase().trim();
 
-  const orderPayload = {
-    source_prefix: sourcePrefix,
-    order_ref: params.orderRef.toUpperCase(),
-    original_sku: params.originalSku,
-    amount_paid: params.amountPaid,
-    customer_name: params.customerName || null,
-    customer_phone: params.customerPhone || null,
-    channel: params.channel || 'Event',
-    status: 'fulfilled' as const
-  };
-
-  let createdOrder: Order;
+  let matchedOrder: Order | null = null;
 
   try {
-    const { data, error } = await supabase.from('orders').insert(orderPayload).select().single();
-    if (!error && data) {
-      createdOrder = data;
-    } else {
-      throw new Error(error?.message || 'Order insert failed');
+    const { data: existing } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('order_ref', cleanRef)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      matchedOrder = existing;
     }
   } catch {
-    createdOrder = {
-      ...orderPayload,
-      id: 'ord-walkup-' + Date.now(),
-      created_at: new Date().toISOString()
-    };
+    const memFound = memoryOrders.find(o => o.order_ref === cleanRef && o.status === 'pending');
+    if (memFound) matchedOrder = memFound;
   }
 
-  memoryOrders.unshift(createdOrder);
+  let finalOrder: Order;
+
+  if (!matchedOrder) {
+    const orderPayload = {
+      source_prefix: sourcePrefix,
+      order_ref: cleanRef,
+      original_sku: params.originalSku,
+      amount_paid: params.amountPaid,
+      customer_name: params.customerName || null,
+      customer_phone: params.customerPhone || null,
+      channel: params.channel || 'Event',
+      status: 'pending' as const
+    };
+
+    try {
+      const { data, error } = await supabase.from('orders').insert(orderPayload).select().single();
+      if (!error && data) {
+        finalOrder = data;
+      } else {
+        throw new Error(error?.message || 'Order insert failed');
+      }
+    } catch {
+      finalOrder = {
+        ...orderPayload,
+        id: 'ord-direct-' + Date.now(),
+        created_at: new Date().toISOString()
+      };
+    }
+    memoryOrders.unshift(finalOrder);
+  } else {
+    finalOrder = matchedOrder;
+    if (params.customerName || params.customerPhone) {
+      finalOrder.customer_name = params.customerName || finalOrder.customer_name;
+      finalOrder.customer_phone = params.customerPhone || finalOrder.customer_phone;
+      try {
+        await supabase.from('orders').update({
+          customer_name: finalOrder.customer_name,
+          customer_phone: finalOrder.customer_phone
+        }).eq('id', finalOrder.id);
+      } catch {}
+    }
+  }
 
   const catalog = await getCatalog();
-  const origPrice = catalog.find(c => c.sku === params.originalSku)?.price || 0;
+  const origPrice = catalog.find(c => c.sku === finalOrder.original_sku)?.price || params.amountPaid || 0;
   const actPrice = catalog.find(c => c.sku === params.actualSku)?.price || 0;
   const priceDelta = actPrice - origPrice;
 
   const { fulfillment, ledgerRow } = await fulfillOrder({
-    orderId: createdOrder.id,
-    sourcePrefix: createdOrder.source_prefix,
-    orderRef: createdOrder.order_ref,
-    originalSku: params.originalSku,
+    orderId: finalOrder.id,
+    sourcePrefix: finalOrder.source_prefix,
+    orderRef: finalOrder.order_ref,
+    originalSku: finalOrder.original_sku || params.originalSku,
     actualSku: params.actualSku,
     priceDelta: priceDelta,
     cashCollected: params.cashCollected,
     overrideReason: params.overrideReason,
     locationId: params.locationId,
     staffId: params.staffId,
-    notes: params.notes || 'Walk-up tent fulfillment'
+    notes: params.notes || 'Direct counter dispatch'
   });
 
   return {
-    order: createdOrder,
+    order: finalOrder,
     fulfillment,
     ledgerRow
   };
 }
+
+
 
 export async function importTikoHubOrders(
   rawOrders: RawParsedOrder[],
