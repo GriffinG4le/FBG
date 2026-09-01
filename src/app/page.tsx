@@ -12,6 +12,8 @@ import {
   getFulfillmentsAction,
   getLedgerAction,
   logWarehouseStockInAction,
+  logDynamicWarehouseStockInAction,
+  logBatchWarehouseStockInAction,
   allocateStockTransferAction,
   fulfillOrderAction,
   quickWalkUpFulfillAction,
@@ -96,16 +98,31 @@ export default function Dashboard() {
   const [swapOverrideReason, setSwapOverrideReason] = useState<string>('');
   const [swapNotes, setSwapNotes] = useState<string>('');
 
-  // Warehouse Stock-In Form
-  const [stockInSku, setStockInSku] = useState<string>('');
-  const [stockInQty, setStockInQty] = useState<number>(50);
-  const [stockInNotes, setStockInNotes] = useState<string>('Official batch intake');
+  // Dynamic Warehouse Stock-In Form (Blank by default on deployment)
+  const [stockInMode, setStockInMode] = useState<'single' | 'multi'>('single');
+  const [stockInCategory, setStockInCategory] = useState<string>('');
+  const [stockInColor, setStockInColor] = useState<string>('');
+  const [stockInSingleSize, setStockInSingleSize] = useState<string>('One Size');
+  const [stockInPrice, setStockInPrice] = useState<string>('');
+  const [stockInSingleQty, setStockInSingleQty] = useState<string>('');
+  const [stockInNotes, setStockInNotes] = useState<string>('');
+  const [stockInMultiSizes, setStockInMultiSizes] = useState<{ size: string; quantity: string }[]>([
+    { size: 'XS', quantity: '' },
+    { size: 'S', quantity: '' },
+    { size: 'M', quantity: '' },
+    { size: 'L', quantity: '' },
+    { size: 'XL', quantity: '' },
+    { size: '2XL', quantity: '' },
+    { size: '3XL', quantity: '' },
+    { size: '4XL', quantity: '' },
+    { size: '5XL', quantity: '' }
+  ]);
 
-  // Stock Transfer Form
+  // Dynamic Stock Transfer Form (Blank by default)
   const [transferSku, setTransferSku] = useState<string>('');
-  const [transferQty, setTransferQty] = useState<number>(20);
+  const [transferQty, setTransferQty] = useState<string>('');
   const [transferDestLocation, setTransferDestLocation] = useState<string>('evt-sp7s');
-  const [transferNotes, setTransferNotes] = useState<string>('Tent allocation');
+  const [transferNotes, setTransferNotes] = useState<string>('');
 
   // CSV Importer
   const [csvFileName, setCsvFileName] = useState<string>('');
@@ -166,11 +183,6 @@ export default function Dashboard() {
       setFulfillments(fuls);
       setLedger(leds);
       setStockOnHand(stocks);
-
-      if (cats.length > 0) {
-        if (!stockInSku) setStockInSku(cats[0].sku);
-        if (!transferSku) setTransferSku(cats[0].sku);
-      }
     } catch (err) {
       console.error("Error loading application data:", err);
     }
@@ -561,12 +573,72 @@ export default function Dashboard() {
   // Submit Warehouse Stock-In
   const handleStockInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!stockInSku || stockInQty <= 0) return;
+    if (!stockInCategory.trim()) {
+      alert("Please enter the merchandise item name / category (e.g. Bucket Hat, Concert Merch, Crewneck Jersey).");
+      return;
+    }
+    if (!stockInColor.trim()) {
+      alert("Please enter the colourway (e.g. Beige, Black, White, Red).");
+      return;
+    }
+
+    const price = parseFloat(stockInPrice) || 2500;
 
     startTransition(async () => {
       try {
-        await logWarehouseStockInAction(stockInSku, stockInQty, 'wh-main', 'Warehouse', stockInNotes);
-        alert(`Stock-In Recorded: +${stockInQty} units of ${stockInSku} added to Main Warehouse.`);
+        if (stockInMode === 'single') {
+          const qty = parseInt(stockInSingleQty, 10) || 0;
+          if (qty <= 0) {
+            alert("Please enter a valid received quantity (> 0).");
+            return;
+          }
+
+          await logDynamicWarehouseStockInAction({
+            category: stockInCategory.trim(),
+            color: stockInColor.trim(),
+            size: stockInSingleSize.trim() || 'One Size',
+            price,
+            quantity: qty,
+            locationId: 'wh-main',
+            staffId: 'Warehouse Staff',
+            notes: stockInNotes.trim() || `Warehouse stock intake for ${stockInCategory.trim()}`
+          });
+
+          alert(`Stock-In Recorded: +${qty} units of ${stockInCategory.trim()} (${stockInColor.trim()} / ${stockInSingleSize.trim()}) added to Main Warehouse.`);
+        } else {
+          // Multi-size matrix
+          const variants = stockInMultiSizes
+            .map(s => ({ size: s.size, quantity: parseInt(s.quantity, 10) || 0 }))
+            .filter(v => v.quantity > 0);
+
+          if (variants.length === 0) {
+            alert("Please enter a quantity for at least one size.");
+            return;
+          }
+
+          const totalQty = variants.reduce((sum, v) => sum + v.quantity, 0);
+
+          await logBatchWarehouseStockInAction({
+            category: stockInCategory.trim(),
+            color: stockInColor.trim(),
+            price,
+            variants,
+            locationId: 'wh-main',
+            staffId: 'Warehouse Staff',
+            notes: stockInNotes.trim() || `Batch intake for ${stockInCategory.trim()} (${totalQty} units total)`
+          });
+
+          alert(`Batch Stock-In Recorded: +${totalQty} units of ${stockInCategory.trim()} (${stockInColor.trim()}) across ${variants.length} sizes added to Main Warehouse.`);
+        }
+
+        // Reset Form to clean blank state
+        setStockInCategory('');
+        setStockInColor('');
+        setStockInPrice('');
+        setStockInSingleQty('');
+        setStockInNotes('');
+        setStockInMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
+
         loadAllData();
       } catch (err) {
         alert(`Stock-in failed: ${(err as Error).message}`);
@@ -577,20 +649,33 @@ export default function Dashboard() {
   // Submit Stock Transfer
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferSku || transferQty <= 0) return;
+    if (!transferSku.trim()) {
+      alert("Please select or enter the SKU to transfer.");
+      return;
+    }
+    const qty = parseInt(transferQty, 10) || 0;
+    if (qty <= 0) {
+      alert("Please enter a valid transfer quantity (> 0).");
+      return;
+    }
 
     startTransition(async () => {
       try {
         await allocateStockTransferAction(
-          transferSku,
-          transferQty,
+          transferSku.trim(),
+          qty,
           'wh-main',
           transferDestLocation,
           'Admin',
-          transferNotes
+          transferNotes.trim() || 'Tent allocation'
         );
         const destName = locations.find(l => l.id === transferDestLocation)?.name || transferDestLocation;
-        alert(`Stock Dispatched: ${transferQty} units of ${transferSku} allocated to ${destName}.`);
+        alert(`Stock Dispatched: ${qty} units of ${transferSku.trim()} allocated to ${destName}.`);
+
+        setTransferSku('');
+        setTransferQty('');
+        setTransferNotes('');
+
         loadAllData();
       } catch (err) {
         alert(`Transfer failed: ${(err as Error).message}`);
@@ -1132,44 +1217,188 @@ export default function Dashboard() {
       {/* TAB 2: STOCK & CATALOG */}
       {/* ========================================================================= */}
       {activeTab === 'stock' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-          {/* Warehouse Stock-In */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: '24px' }}>
+          {/* Dynamic Warehouse Stock-In */}
           <div className="card">
-            <div className="card-head">Warehouse stock-in</div>
-            <form className="form" onSubmit={handleStockInSubmit}>
-              <div className="field">
-                <span className="field-label">Select SKU</span>
-                <select
-                  className="plain"
-                  value={stockInSku}
-                  onChange={(e) => setStockInSku(e.target.value)}
-                  required
+            <div className="card-head">
+              <span>Warehouse stock-in</span>
+              <div style={{ display: 'flex', gap: '4px', background: 'var(--bg)', padding: '3px', borderRadius: '7px', border: '1px solid var(--line)' }}>
+                <button
+                  type="button"
+                  onClick={() => setStockInMode('single')}
+                  style={{
+                    border: 'none',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    borderRadius: '5px',
+                    background: stockInMode === 'single' ? 'var(--panel)' : 'transparent',
+                    color: stockInMode === 'single' ? 'var(--ink)' : 'var(--muted)',
+                    boxShadow: stockInMode === 'single' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                    cursor: 'pointer'
+                  }}
                 >
-                  {catalog.map(c => (
-                    <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
-                  ))}
-                </select>
+                  Single Item
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStockInMode('multi')}
+                  style={{
+                    border: 'none',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    borderRadius: '5px',
+                    background: stockInMode === 'multi' ? 'var(--panel)' : 'transparent',
+                    color: stockInMode === 'multi' ? 'var(--ink)' : 'var(--muted)',
+                    boxShadow: stockInMode === 'multi' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Apparel Matrix (Multi-Size)
+                </button>
+              </div>
+            </div>
+
+            <form className="form" onSubmit={handleStockInSubmit}>
+              {/* Category / Name */}
+              <div className="field">
+                <span className="field-label">Item / Category</span>
+                <input
+                  type="text"
+                  list="category-suggestions"
+                  placeholder="e.g. Bucket Hat, Concert Merch, Hoodie"
+                  value={stockInCategory}
+                  onChange={(e) => setStockInCategory(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
+                  required
+                />
+                <datalist id="category-suggestions">
+                  <option value="Bucket Hat" />
+                  <option value="Concert Merch" />
+                  <option value="Fan Jersey" />
+                  <option value="Crew Neck" />
+                  <option value="Graphic Hoodie" />
+                  <option value="KRU Replica" />
+                  <option value="Festival Tee" />
+                  <option value="Tote Bag" />
+                  <option value="Snapback Cap" />
+                </datalist>
               </div>
 
+              {/* Colourway */}
               <div className="field">
-                <span className="field-label">Quantity</span>
+                <span className="field-label">Colourway</span>
+                <input
+                  type="text"
+                  list="color-suggestions"
+                  placeholder="e.g. Beige, Black, White, Red"
+                  value={stockInColor}
+                  onChange={(e) => setStockInColor(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
+                  required
+                />
+                <datalist id="color-suggestions">
+                  <option value="Black" />
+                  <option value="Beige" />
+                  <option value="White" />
+                  <option value="Red" />
+                  <option value="Navy" />
+                  <option value="Grey" />
+                  <option value="Green" />
+                  <option value="Vintage Wash" />
+                  <option value="Olive" />
+                </datalist>
+              </div>
+
+              {/* Retail Price */}
+              <div className="field">
+                <span className="field-label">Retail Price (KES)</span>
                 <input
                   type="number"
-                  min="1"
-                  value={stockInQty}
-                  onChange={(e) => setStockInQty(parseInt(e.target.value, 10) || 0)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px' }}
+                  placeholder="e.g. 1500"
+                  value={stockInPrice}
+                  onChange={(e) => setStockInPrice(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '120px' }}
                   required
                 />
               </div>
 
+              {/* Single Mode: Size & Qty */}
+              {stockInMode === 'single' && (
+                <>
+                  <div className="field">
+                    <span className="field-label">Size</span>
+                    <input
+                      type="text"
+                      list="size-suggestions"
+                      placeholder="e.g. One Size, M, L"
+                      value={stockInSingleSize}
+                      onChange={(e) => setStockInSingleSize(e.target.value)}
+                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '140px' }}
+                    />
+                    <datalist id="size-suggestions">
+                      <option value="One Size" />
+                      <option value="Standard" />
+                      <option value="XS" />
+                      <option value="S" />
+                      <option value="M" />
+                      <option value="L" />
+                      <option value="XL" />
+                      <option value="2XL" />
+                      <option value="3XL" />
+                    </datalist>
+                  </div>
+
+                  <div className="field">
+                    <span className="field-label">Quantity Received</span>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="e.g. 50"
+                      value={stockInSingleQty}
+                      onChange={(e) => setStockInSingleQty(e.target.value)}
+                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Multi Mode: Matrix Grid */}
+              {stockInMode === 'multi' && (
+                <div className="field block-field">
+                  <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>Quantities by Size</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                    {stockInMultiSizes.map((szObj, idx) => (
+                      <div key={szObj.size} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
+                        <span className="mono" style={{ fontSize: '12px', fontWeight: 600 }}>{szObj.size}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={szObj.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setStockInMultiSizes(prev => prev.map((item, i) => i === idx ? { ...item, quantity: val } : item));
+                          }}
+                          style={{ width: '45px', border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Supplier Notes */}
               <div className="field">
-                <span className="field-label">Notes</span>
+                <span className="field-label">Supplier / Batch Notes</span>
                 <input
                   type="text"
+                  placeholder="e.g. Supplier Batch #1, Drop #2"
                   value={stockInNotes}
                   onChange={(e) => setStockInNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
                 />
               </div>
 
@@ -1179,7 +1408,7 @@ export default function Dashboard() {
             </form>
           </div>
 
-          {/* Stock Transfer */}
+          {/* Dynamic Stock Transfer */}
           <div className="card">
             <div className="card-head">Stock transfer to tent</div>
             <form className="form" onSubmit={handleTransferSubmit}>
@@ -1191,8 +1420,11 @@ export default function Dashboard() {
                   onChange={(e) => setTransferSku(e.target.value)}
                   required
                 >
+                  <option value="">Choose item to transfer...</option>
                   {catalog.map(c => (
-                    <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
+                    <option key={c.sku} value={c.sku}>
+                      {c.sku} ({c.price} KES)
+                    </option>
                   ))}
                 </select>
               </div>
@@ -1212,24 +1444,26 @@ export default function Dashboard() {
               </div>
 
               <div className="field">
-                <span className="field-label">Quantity</span>
+                <span className="field-label">Transfer Quantity</span>
                 <input
                   type="number"
                   min="1"
+                  placeholder="e.g. 20"
                   value={transferQty}
-                  onChange={(e) => setTransferQty(parseInt(e.target.value, 10) || 0)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px' }}
+                  onChange={(e) => setTransferQty(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
                   required
                 />
               </div>
 
               <div className="field">
-                <span className="field-label">Notes</span>
+                <span className="field-label">Transfer Notes</span>
                 <input
                   type="text"
+                  placeholder="e.g. Tent allocation batch"
                   value={transferNotes}
                   onChange={(e) => setTransferNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
                 />
               </div>
 
@@ -1241,15 +1475,20 @@ export default function Dashboard() {
 
           {/* Catalog & OG Pricing */}
           <div className="card" style={{ gridColumn: '1 / -1' }}>
-            <div className="card-head">SKU catalog & baseline OG pricing</div>
-            <div style={{ padding: '0 0 12px 0' }}>
+            <div className="card-head">
+              <span>SKU catalog & baseline pricing</span>
+              <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                Total registered SKUs: <strong>{catalog.length}</strong>
+              </span>
+            </div>
+            <div style={{ padding: '0 0 12px 0', maxHeight: '350px', overflowY: 'auto' }}>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>SKU</th>
+                    <th>SKU Variant</th>
                     <th>Category</th>
                     <th>Color / Size</th>
-                    <th style={{ textAlign: 'right' }}>Price</th>
+                    <th style={{ textAlign: 'right' }}>Price (KES)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1257,7 +1496,7 @@ export default function Dashboard() {
                     <tr key={c.sku}>
                       <td className="mono" style={{ fontWeight: 600 }}>{c.sku}</td>
                       <td>{c.category}</td>
-                      <td>{c.color || 'Std'} / {c.size || 'None'}</td>
+                      <td>{c.color || 'Standard'} / {c.size || 'One Size'}</td>
                       <td className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>{c.price.toLocaleString()} KES</td>
                     </tr>
                   ))}

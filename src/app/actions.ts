@@ -13,6 +13,8 @@ import {
   getOrderPrefixes,
   updateOrderPrefixLabel,
   logWarehouseStockIn,
+  logDynamicWarehouseStockIn,
+  logBatchWarehouseStockIn,
   allocateStockTransfer,
   fulfillOrder,
   quickWalkUpFulfill,
@@ -133,6 +135,42 @@ export async function logWarehouseStockInAction(
     throw new Error("Failed to record stock-in movement.");
   }
 }
+
+export async function logDynamicWarehouseStockInAction(params: {
+  category: string;
+  color: string;
+  size: string;
+  price: number;
+  quantity: number;
+  locationId?: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<LedgerRow> {
+  try {
+    return await logDynamicWarehouseStockIn(params);
+  } catch (error) {
+    console.error("Failed to log dynamic warehouse stock-in:", error);
+    throw new Error("Failed to record dynamic stock-in.");
+  }
+}
+
+export async function logBatchWarehouseStockInAction(params: {
+  category: string;
+  color: string;
+  price: number;
+  variants: { size: string; quantity: number }[];
+  locationId?: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<LedgerRow[]> {
+  try {
+    return await logBatchWarehouseStockIn(params);
+  } catch (error) {
+    console.error("Failed to log batch warehouse stock-in:", error);
+    throw new Error("Failed to record batch stock-in.");
+  }
+}
+
 
 export async function allocateStockTransferAction(
   sku: string,

@@ -490,6 +490,65 @@ export async function logWarehouseStockIn(
   return created;
 }
 
+export async function logDynamicWarehouseStockIn(params: {
+  category: string;
+  color: string;
+  size: string;
+  price: number;
+  quantity: number;
+  locationId?: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<LedgerRow> {
+  const cleanCategory = params.category.trim();
+  const cleanColor = params.color.trim() || 'Standard';
+  const cleanSize = params.size.trim() || 'One Size';
+  const sku = `${cleanCategory}|${cleanColor}|${cleanSize}`;
+
+  await ensureSkuExists(sku, params.price);
+  return await logWarehouseStockIn(
+    sku,
+    params.quantity,
+    params.locationId || 'wh-main',
+    params.staffId || 'Warehouse Staff',
+    params.notes || `Stock intake for ${cleanCategory} (${cleanColor} / ${cleanSize})`
+  );
+}
+
+export async function logBatchWarehouseStockIn(params: {
+  category: string;
+  color: string;
+  price: number;
+  variants: { size: string; quantity: number }[];
+  locationId?: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<LedgerRow[]> {
+  const results: LedgerRow[] = [];
+  const cleanCategory = params.category.trim();
+  const cleanColor = params.color.trim() || 'Standard';
+
+  for (const v of params.variants) {
+    if (v.quantity > 0) {
+      const cleanSize = v.size.trim() || 'One Size';
+      const sku = `${cleanCategory}|${cleanColor}|${cleanSize}`;
+      await ensureSkuExists(sku, params.price);
+
+      const row = await logWarehouseStockIn(
+        sku,
+        v.quantity,
+        params.locationId || 'wh-main',
+        params.staffId || 'Warehouse Staff',
+        params.notes || `Batch intake for ${cleanCategory} (${cleanColor} / ${cleanSize})`
+      );
+      results.push(row);
+    }
+  }
+
+  return results;
+}
+
+
 export async function allocateStockTransfer(
   sku: string,
   quantity: number,
