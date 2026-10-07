@@ -23,9 +23,14 @@ import {
   verifyWarehouseReturnIntake,
   fulfillOrder,
   quickWalkUpFulfill,
+  processQuickSwap,
+  processQuickRefund,
   importTikoHubOrders,
   clearAllData,
   resetDatabase,
+  getStaffProfiles,
+  createStaffProfile,
+  assignStaffToLocation,
   Location,
   CatalogItem,
   Order,
@@ -33,7 +38,8 @@ import {
   LedgerRow,
   StockOnHandItem,
   OrderPrefix,
-  EventStockTransfer
+  EventStockTransfer,
+  StaffProfile
 } from '../lib/db';
 import { RawParsedOrder } from '../lib/csvParser';
 
@@ -299,6 +305,37 @@ export async function quickWalkUpFulfillAction(params: {
   }
 }
 
+export async function processQuickSwapAction(params: {
+  orderId: string;
+  newSku: string;
+  cashDelta?: number;
+  locationId: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<{ success: boolean; oldSku: string; newSku: string; cashDelta: number }> {
+  try {
+    return await processQuickSwap(params);
+  } catch (error) {
+    console.error("Failed to process quick swap:", error);
+    throw new Error("Failed to record swap.");
+  }
+}
+
+export async function processQuickRefundAction(params: {
+  orderId: string;
+  refundAmount?: number;
+  locationId: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<{ success: boolean; skuReturned: string; refundAmount: number }> {
+  try {
+    return await processQuickRefund(params);
+  } catch (error) {
+    console.error("Failed to process quick refund:", error);
+    throw new Error("Failed to record refund.");
+  }
+}
+
 export async function importTikoHubOrdersAction(
   rawOrders: RawParsedOrder[],
   staffId?: string
@@ -326,5 +363,36 @@ export async function resetDatabaseAction(): Promise<void> {
   } catch (error) {
     console.error("Failed to reset database:", error);
     throw new Error("Failed to reset database.");
+  }
+}
+
+export async function getStaffProfilesAction(): Promise<StaffProfile[]> {
+  try {
+    return await getStaffProfiles();
+  } catch (error) {
+    console.error("Failed to get staff profiles:", error);
+    throw new Error("Failed to load staff profiles.");
+  }
+}
+
+export async function createStaffProfileAction(params: {
+  name: string;
+  role: 'admin' | 'warehouse' | 'event_staff';
+  assigned_location_ids?: string[];
+}): Promise<StaffProfile> {
+  try {
+    return await createStaffProfile(params);
+  } catch (error) {
+    console.error("Failed to create staff profile:", error);
+    throw new Error("Failed to create staff member.");
+  }
+}
+
+export async function assignStaffToLocationAction(staffId: string, locationId: string): Promise<StaffProfile> {
+  try {
+    return await assignStaffToLocation(staffId, locationId);
+  } catch (error) {
+    console.error("Failed to assign staff:", error);
+    throw new Error("Failed to assign staff to location.");
   }
 }

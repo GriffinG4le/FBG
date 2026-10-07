@@ -5,26 +5,25 @@ import {
   getLocationsAction,
   createEventLocationAction,
   getOrderPrefixesAction,
-  updateOrderPrefixLabelAction,
   getCatalogAction,
-  upsertCatalogItemAction,
   getDerivedStockOnHandAction,
   getOrdersAction,
   getFulfillmentsAction,
   getLedgerAction,
-  logWarehouseStockInAction,
   logDynamicWarehouseStockInAction,
   logBatchWarehouseStockInAction,
-  allocateStockTransferAction,
   getEventTransfersAction,
   dispatchBatchToEventAction,
   submitTentStaffReturnCountAction,
   verifyWarehouseReturnIntakeAction,
-  fulfillOrderAction,
   quickWalkUpFulfillAction,
-  importTikoHubOrdersAction,
+  processQuickSwapAction,
+  processQuickRefundAction,
   clearAllDataAction,
-  resetDatabaseAction
+  resetDatabaseAction,
+  getStaffProfilesAction,
+  createStaffProfileAction,
+  assignStaffToLocationAction
 } from './actions';
 import {
   Location,
@@ -34,28 +33,14 @@ import {
   Fulfillment,
   LedgerRow,
   StockOnHandItem,
-  EventStockTransfer
+  EventStockTransfer,
+  StaffProfile
 } from '../lib/db';
-import { parseTikoHubCSV, ParseResult } from '../lib/csvParser';
-import {
-  enqueueOfflineAction,
-  getOfflineQueue,
-  syncOfflineQueue,
-  clearOfflineQueue
-} from '../lib/offlineQueue';
 
-type NavigationTab = 'dashboard' | 'fulfillment' | 'events' | 'stock' | 'importer' | 'reports';
+type Tab = 'dashboard' | 'dispatch' | 'stock' | 'events' | 'add-stock' | 'settings';
 
-// Notes annotation metadata from event spreadsheet
-const SPREADSHEET_NOTES: Record<string, string> = {
-  'Fan Jersey|White|L': '70 Stored',
-  'Fan Jersey|Red|L': '10 missing',
-  'Fan Jersey|White|XL': '160 Stored, 3 Missing'
-};
-
-export default function Dashboard() {
-  // Navigation & Scoping
-  const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
+export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [selectedLocationId, setSelectedLocationId] = useState<string>('evt-sp7s');
 
   // Core Data
@@ -67,39 +52,52 @@ export default function Dashboard() {
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [stockOnHand, setStockOnHand] = useState<StockOnHandItem[]>([]);
   const [eventTransfers, setEventTransfers] = useState<EventStockTransfer[]>([]);
+  const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([]);
+  const [selectedStaffId, setSelectedStaffId] = useState<string>('st-jane');
 
-  // Connectivity & Offline Queue
-  const [isOnline, setIsOnline] = useState<boolean>(true);
-  const [queueSize, setQueueSize] = useState<number>(0);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  // New Staff Registration State (Settings Tab)
+  const [newStaffName, setNewStaffName] = useState<string>('');
+  const [newStaffRole, setNewStaffRole] = useState<'event_staff' | 'warehouse' | 'admin'>('event_staff');
+  const [newStaffAssignedLoc, setNewStaffAssignedLoc] = useState<string>('evt-driftwood');
 
-  // Form State for Log & Dispatch
+  // Dispatch Form State
   const [logPrefix, setLogPrefix] = useState<string>('ORD');
   const [logOrderRef, setLogOrderRef] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Fan Jersey');
   const [selectedColor, setSelectedColor] = useState<string>('White');
   const [selectedSize, setSelectedSize] = useState<string>('M');
-  const [logAmountPaid, setLogAmountPaid] = useState<string>('2500');
-  const [logCashCollected, setLogCashCollected] = useState<string>('0');
-  const [logCustomerName, setLogCustomerName] = useState<string>('');
-  const [logCustomerPhone, setLogCustomerPhone] = useState<string>('');
-  const [logDestination, setLogDestination] = useState<string>('');
-  const [logChannel, setLogChannel] = useState<'Online' | 'Event' | 'Card'>('Event');
   const [logNotes, setLogNotes] = useState<string>('');
-  const [showOptionalDetails, setShowOptionalDetails] = useState<boolean>(false);
+  const [showDetails, setShowDetails] = useState<boolean>(false);
+  const [customerName, setCustomerName] = useState<string>('');
 
-  // Right-side category filter for available stock ledger
-  const [stockViewCategory, setStockViewCategory] = useState<string>('all');
+  // Search
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Dynamic Warehouse Stock-In Form (Blank by default on deployment)
-  const [stockInMode, setStockInMode] = useState<'single' | 'multi'>('single');
-  const [stockInCategory, setStockInCategory] = useState<string>('');
-  const [stockInColor, setStockInColor] = useState<string>('');
-  const [stockInSingleSize, setStockInSingleSize] = useState<string>('One Size');
-  const [stockInPrice, setStockInPrice] = useState<string>('');
-  const [stockInSingleQty, setStockInSingleQty] = useState<string>('');
-  const [stockInNotes, setStockInNotes] = useState<string>('');
-  const [stockInMultiSizes, setStockInMultiSizes] = useState<{ size: string; quantity: string }[]>([
+  // Stock Filter & Hierarchy State
+  const [stockSearchQuery, setStockSearchQuery] = useState<string>('');
+  const [stockCategoryFilter, setStockCategoryFilter] = useState<string>('all');
+  const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({
+    'Fan Jersey': true,
+    'Crew Neck': true,
+    'KRU Replica': true,
+    'Bucket Hat': true,
+    'Tank Top': true
+  });
+  const [expandedCols, setExpandedCols] = useState<Record<string, boolean>>({
+    'Fan Jersey|White': true,
+    'Fan Jersey|Red': true,
+    'Crew Neck|Navy': true,
+    'KRU Replica|Green': true
+  });
+
+  // Dynamic Add Stock Form
+  const [addMode, setAddMode] = useState<'single' | 'multi'>('single');
+  const [addCategory, setAddCategory] = useState<string>('Fan Jersey');
+  const [addColor, setAddColor] = useState<string>('White');
+  const [addSingleSize, setAddSingleSize] = useState<string>('M');
+  const [addPrice, setAddPrice] = useState<string>('2500');
+  const [addSingleQty, setAddSingleQty] = useState<string>('');
+  const [addMultiSizes, setAddMultiSizes] = useState<{ size: string; quantity: string }[]>([
     { size: 'XS', quantity: '' },
     { size: 'S', quantity: '' },
     { size: 'M', quantity: '' },
@@ -111,89 +109,53 @@ export default function Dashboard() {
     { size: '5XL', quantity: '' }
   ]);
 
-  // Event Lifecycle States
+  // Event State
   const [newEventName, setNewEventName] = useState<string>('');
-  const [newEventVenue, setNewEventVenue] = useState<string>('');
   const [eventDispatchEventId, setEventDispatchEventId] = useState<string>('');
-  const [eventDispatchUnitKey, setEventDispatchUnitKey] = useState<string>('');
-  const [eventDispatchSize, setEventDispatchSize] = useState<string>('');
-  const [eventDispatchQty, setEventDispatchQty] = useState<string>('');
-  const [eventDispatchNotes, setEventDispatchNotes] = useState<string>('');
-
-  // Accordion state for Available Stock list
-  const [expandedStockUnits, setExpandedStockUnits] = useState<Record<string, boolean>>({
-    'Fan Jersey|White': true,
-    'Fan Jersey|Red': true
+  const [eventDispatchCategory, setEventDispatchCategory] = useState<string>('Fan Jersey');
+  const [eventDispatchColor, setEventDispatchColor] = useState<string>('White');
+  const [eventDispatchSize, setEventDispatchSize] = useState<string>('M');
+  const [eventDispatchQty, setEventDispatchQty] = useState<string>('20');
+  const [eventDispatchMode, setEventDispatchMode] = useState<'single' | 'batch'>('single');
+  const [eventDispatchMultiSizes, setEventDispatchMultiSizes] = useState<{ size: string; quantity: string }[]>([
+    { size: 'XS', quantity: '' },
+    { size: 'S', quantity: '' },
+    { size: 'M', quantity: '' },
+    { size: 'L', quantity: '' },
+    { size: 'XL', quantity: '' },
+    { size: '2XL', quantity: '' },
+    { size: '3XL', quantity: '' },
+    { size: '4XL', quantity: '' },
+    { size: '5XL', quantity: '' }
+  ]);
+  const [expandedEventCards, setExpandedEventCards] = useState<Record<string, boolean>>({
+    'evt-sp7s': true
   });
 
-  const toggleStockUnit = (unitKey: string) => {
-    setExpandedStockUnits(prev => ({
-      ...prev,
-      [unitKey]: !prev[unitKey]
-    }));
-  };
-
-  // Tent Staff Closeout Count Modal
-  const [tentModalOpen, setTentModalOpen] = useState<boolean>(false);
-  const [tentModalEventId, setTentModalEventId] = useState<string>('');
-  const [tentCountRows, setTentCountRows] = useState<{ sku: string; staffCount: string; expectedQty: number }[]>([]);
-  const [tentCountStaffName, setTentCountStaffName] = useState<string>('');
-  const [tentCountNotes, setTentCountNotes] = useState<string>('');
-
-  // Warehouse Verification Modal
-  const [whVerifyModalOpen, setWhVerifyModalOpen] = useState<boolean>(false);
-  const [whVerifyEventId, setWhVerifyEventId] = useState<string>('');
-  const [whVerifyRows, setWhVerifyRows] = useState<{ sku: string; staffCount: number; whCount: string; expectedQty: number }[]>([]);
-  const [whVerifyStaffName, setWhVerifyStaffName] = useState<string>('');
-  const [whVerifyNotes, setWhVerifyNotes] = useState<string>('');
-
-  // Modals for swaps
+  // Modals
   const [swapModalOpen, setSwapModalOpen] = useState<boolean>(false);
   const [swapOrder, setSwapOrder] = useState<Order | null>(null);
   const [selectedSwapSku, setSelectedSwapSku] = useState<string>('');
-  const [swapCashOverride, setSwapCashOverride] = useState<string>('');
-  const [swapOverrideReason, setSwapOverrideReason] = useState<string>('');
   const [swapNotes, setSwapNotes] = useState<string>('');
 
-  // CSV Importer
-  const [csvFileName, setCsvFileName] = useState<string>('');
-  const [parseResult, setParseResult] = useState<ParseResult | null>(null);
+  const [refundModalOpen, setRefundModalOpen] = useState<boolean>(false);
+  const [refundOrder, setRefundOrder] = useState<Order | null>(null);
+  const [refundAmount, setRefundAmount] = useState<string>('');
+
+  const [tentModalOpen, setTentModalOpen] = useState<boolean>(false);
+  const [tentModalEventId, setTentModalEventId] = useState<string>('');
+  const [tentCountRows, setTentCountRows] = useState<{ sku: string; staffCount: string; expectedQty: number }[]>([]);
+
+  const [whVerifyModalOpen, setWhVerifyModalOpen] = useState<boolean>(false);
+  const [whVerifyEventId, setWhVerifyEventId] = useState<string>('');
+  const [whVerifyRows, setWhVerifyRows] = useState<{ sku: string; staffCount: number; whCount: string; expectedQty: number }[]>([]);
 
   const [isPending, startTransition] = useTransition();
 
-  // Load Data on Mount
-  useEffect(() => {
-    setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
-
-    const handleOnline = () => {
-      setIsOnline(true);
-      autoSync();
-    };
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    const handleQueueUpdate = () => setQueueSize(getOfflineQueue().length);
-    window.addEventListener('fbg_queue_updated', handleQueueUpdate);
-    updateQueueCount();
-
-    loadAllData();
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('fbg_queue_updated', handleQueueUpdate);
-    };
-  }, []);
-
-  const updateQueueCount = () => {
-    setQueueSize(getOfflineQueue().length);
-  };
-
+  // Load Data
   const loadAllData = async () => {
     try {
-      const [locs, prefs, cats, ords, fuls, leds, stocks, etrans] = await Promise.all([
+      const [locs, prefs, cats, ords, fuls, leds, stocks, etrans, stfs] = await Promise.all([
         getLocationsAction(),
         getOrderPrefixesAction(),
         getCatalogAction(),
@@ -201,7 +163,8 @@ export default function Dashboard() {
         getFulfillmentsAction(),
         getLedgerAction(),
         getDerivedStockOnHandAction(),
-        getEventTransfersAction()
+        getEventTransfersAction(),
+        getStaffProfilesAction()
       ]);
 
       setLocations(locs);
@@ -212,67 +175,204 @@ export default function Dashboard() {
       setLedger(leds);
       setStockOnHand(stocks);
       setEventTransfers(etrans);
+      setStaffProfiles(stfs);
 
       if (locs.filter(l => l.type === 'event').length > 0 && !eventDispatchEventId) {
         setEventDispatchEventId(locs.filter(l => l.type === 'event')[0].id);
       }
     } catch (err) {
-      console.error("Error loading application data:", err);
-    }
-  };
-
-  const autoSync = async () => {
-    if (getOfflineQueue().length > 0) {
-      handleManualSync();
-    }
-  };
-
-  const handleManualSync = async () => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-
-    try {
-      await syncOfflineQueue();
-    } catch (err) {
       console.error(err);
-    } finally {
-      setIsSyncing(false);
-      updateQueueCount();
-      loadAllData();
     }
   };
 
-  // Active Location Info
+  useEffect(() => {
+    loadAllData();
+  }, []);
+
+  const currentStaff = useMemo(() => {
+    return staffProfiles.find(s => s.id === selectedStaffId) || staffProfiles[0] || {
+      id: 'st-jane',
+      name: 'Jane Wambui',
+      role: 'event_staff' as const,
+      assigned_location_ids: ['evt-driftwood', 'evt-sp7s']
+    };
+  }, [staffProfiles, selectedStaffId]);
+
+  const STANDARD_APPAREL_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+
+  const isAccessoryCategory = (category: string) => {
+    const c = (category || '').toLowerCase().trim();
+    return c.includes('hat') || c.includes('cap') || c.includes('bag') || c.includes('ball') || c.includes('bottle') || c.includes('sticker') || c.includes('pin');
+  };
+
+  // Event Dispatch Dynamic Helpers
+  const eventDispatchAvailableColors = useMemo(() => {
+    return [...new Set(
+      catalog.filter(c => c.category === eventDispatchCategory).map(c => c.color || 'Standard')
+    )];
+  }, [catalog, eventDispatchCategory]);
+
+  const eventDispatchAvailableSizes = useMemo(() => {
+    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'];
+    if (isAccessoryCategory(eventDispatchCategory)) {
+      return ['One Size'];
+    }
+
+    const foundSizes = catalog
+      .filter(c => c.category === eventDispatchCategory && (c.color || 'Standard') === eventDispatchColor)
+      .map(c => c.size || 'M');
+
+    const combined = [...new Set([...STANDARD_APPAREL_SIZES, ...foundSizes])].filter(
+      s => s !== 'One Size' && s !== 'Standard' && s !== 'None'
+    );
+
+    return combined.sort((a, b) => {
+      const idxA = order.indexOf(a);
+      const idxB = order.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      return a.localeCompare(b);
+    });
+  }, [catalog, eventDispatchCategory, eventDispatchColor]);
+
+  const getAvailableWarehouseStock = (cat: string, col: string, sz: string) => {
+    const sku = `${cat}|${col}|${sz}`;
+    const whItem = stockOnHand.find(s => (s.location_id === 'wh-main' || s.location_type === 'warehouse') && s.sku === sku);
+    if (whItem && whItem.stock_on_hand > 0) {
+      return whItem.stock_on_hand;
+    }
+    const totalIn = ledger
+      .filter(l => l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
+      .reduce((sum, l) => sum + l.quantity_delta, 0);
+    const totalOut = Math.abs(
+      ledger
+        .filter(l => l.sku === sku && l.type === 'Dispatch')
+        .reduce((sum, l) => sum + l.quantity_delta, 0)
+    );
+    return Math.max(0, totalIn - totalOut);
+  };
+
+  const eventStationSummaries = useMemo(() => {
+    const eventLocs = locations.filter(l => l.type === 'event');
+    
+    return eventLocs.map(ev => {
+      const isCurrent = ev.id === selectedLocationId;
+      const evLedger = ledger.filter(l => l.location_id === ev.id);
+      
+      const totalDispatched = evLedger
+        .filter(l => l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0))
+        .reduce((sum, l) => sum + l.quantity_delta, 0);
+
+      const totalSold = Math.abs(
+        evLedger
+          .filter(l => l.type === 'Dispatch')
+          .reduce((sum, l) => sum + l.quantity_delta, 0)
+      );
+
+      const tentStockOnHand = stockOnHand
+        .filter(s => s.location_id === ev.id)
+        .reduce((sum, s) => sum + s.stock_on_hand, 0);
+
+      const totalRevenue = evLedger
+        .filter(l => l.type === 'Dispatch')
+        .reduce((sum, l) => sum + (l.amount || 0), 0);
+
+      const breakdown = catalog.map(catItem => {
+        const sku = catItem.sku;
+        const initialAtTent = evLedger
+          .filter(l => l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
+          .reduce((sum, l) => sum + l.quantity_delta, 0);
+
+        const soldAtTent = Math.abs(
+          evLedger
+            .filter(l => l.sku === sku && l.type === 'Dispatch')
+            .reduce((sum, l) => sum + l.quantity_delta, 0)
+        );
+
+        const remAtTent = stockOnHand.find(s => s.location_id === ev.id && s.sku === sku)?.stock_on_hand || 0;
+
+        return {
+          sku,
+          category: catItem.category,
+          color: catItem.color || 'Standard',
+          size: catItem.size || 'One Size',
+          price: catItem.price,
+          dispatched: initialAtTent,
+          sold: soldAtTent,
+          remaining: remAtTent
+        };
+      }).filter(b => b.dispatched > 0 || b.sold > 0 || b.remaining > 0);
+
+      // Merchant attribution & audit breakdown for this event
+      const staffSalesMap = new Map<string, { name: string; sold: number; revenue: number; swaps: number; refunds: number }>();
+      evLedger.forEach(l => {
+        const sName = l.staff_id || 'Staff';
+        if (!staffSalesMap.has(sName)) {
+          staffSalesMap.set(sName, { name: sName, sold: 0, revenue: 0, swaps: 0, refunds: 0 });
+        }
+        const entry = staffSalesMap.get(sName)!;
+        if (l.type === 'Dispatch') {
+          entry.sold += Math.abs(l.quantity_delta);
+          entry.revenue += (l.amount || 0);
+        } else if (l.type === 'Swap') {
+          entry.swaps += 0.5;
+        } else if (l.type === 'Refund') {
+          entry.refunds += 1;
+        }
+      });
+
+      const staffAudits = Array.from(staffSalesMap.values()).filter(s => s.sold > 0 || s.swaps > 0 || s.refunds > 0);
+      const assignedStaff = staffProfiles.filter(s => s.assigned_location_ids.includes(ev.id));
+
+      return {
+        event: ev,
+        isCurrent,
+        totalDispatched,
+        totalSold,
+        totalRemaining: tentStockOnHand,
+        totalRevenue,
+        inventoryBreakdown: breakdown,
+        staffAudits,
+        assignedStaff
+      };
+    });
+  }, [locations, ledger, stockOnHand, catalog, selectedLocationId, staffProfiles]);
+
   const activeLocation = useMemo(() => {
     return locations.find(l => l.id === selectedLocationId) || locations[0] || {
       id: 'evt-sp7s',
-      name: 'SportPesa 7s (RFUEA Ground)',
+      name: 'SportPesa 7s Tent',
       type: 'event' as const,
       status: 'active' as const,
       created_at: new Date().toISOString()
     };
   }, [locations, selectedLocationId]);
 
-  // Dynamic Categories & Colors
+  // Categories and colors
   const availableCategories = useMemo(() => {
     return [...new Set(catalog.map(c => c.category))].filter(Boolean);
   }, [catalog]);
 
-  const availableColorsForSelectedCategory = useMemo(() => {
+  const availableColors = useMemo(() => {
     return [...new Set(
-      catalog
-        .filter(c => c.category === selectedCategory)
-        .map(c => c.color || 'Standard')
+      catalog.filter(c => c.category === selectedCategory).map(c => c.color || 'Standard')
     )];
   }, [catalog, selectedCategory]);
 
-  const availableSizesForSelectedCategoryColor = useMemo(() => {
-    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
-    const sizes = catalog
+  const availableSizes = useMemo(() => {
+    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'];
+    if (isAccessoryCategory(selectedCategory)) {
+      return ['One Size'];
+    }
+
+    const foundSizes = catalog
       .filter(c => c.category === selectedCategory && (c.color || 'Standard') === selectedColor)
-      .map(c => c.size || 'One Size');
-    
-    return [...new Set(sizes)].sort((a, b) => {
+      .map(c => c.size || 'M');
+
+    const combined = [...new Set([...STANDARD_APPAREL_SIZES, ...foundSizes])].filter(
+      s => s !== 'One Size' && s !== 'Standard' && s !== 'None'
+    );
+
+    return combined.sort((a, b) => {
       const idxA = order.indexOf(a);
       const idxB = order.indexOf(b);
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
@@ -280,721 +380,431 @@ export default function Dashboard() {
     });
   }, [catalog, selectedCategory, selectedColor]);
 
-  // Grouped Available Stock Units for Active Location (Accordion Display)
-  const groupedStockUnits = useMemo(() => {
-    const map = new Map<string, {
-      key: string;
-      category: string;
-      color: string;
-      totalStock: number;
-      lowStockCount: number;
-      items: StockOnHandItem[];
-    }>();
-
-    const filtered = stockOnHand.filter(s => s.location_id === selectedLocationId && (stockViewCategory === 'all' || s.category === stockViewCategory));
-
-    for (const s of filtered) {
-      const key = `${s.category}|${s.color || 'Standard'}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          category: s.category,
-          color: s.color || 'Standard',
-          totalStock: 0,
-          lowStockCount: 0,
-          items: []
-        });
-      }
-      const grp = map.get(key)!;
-      grp.totalStock += s.stock_on_hand;
-      if (s.stock_on_hand > 0 && s.stock_on_hand <= s.low_stock_threshold) {
-        grp.lowStockCount++;
-      }
-      grp.items.push(s);
-    }
-
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
-    for (const grp of map.values()) {
-      grp.items.sort((a, b) => {
-        const idxA = sizeOrder.indexOf(a.size || 'One Size');
-        const idxB = sizeOrder.indexOf(b.size || 'One Size');
-        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-        return (a.size || '').localeCompare(b.size || '');
-      });
-    }
-
-    return Array.from(map.values());
-  }, [stockOnHand, selectedLocationId, stockViewCategory]);
-
-  // Warehouse Grouped Units & Sizes for Outbound Event Dispatch
-  const warehouseGroupedUnits = useMemo(() => {
-    const map = new Map<string, {
-      key: string;
-      category: string;
-      color: string;
-      totalStock: number;
-      items: StockOnHandItem[];
-    }>();
-
-    const whStock = stockOnHand.filter(s => s.location_id === 'wh-main' && s.stock_on_hand > 0);
-    for (const s of whStock) {
-      const key = `${s.category}|${s.color || 'Standard'}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          category: s.category,
-          color: s.color || 'Standard',
-          totalStock: 0,
-          items: []
-        });
-      }
-      const grp = map.get(key)!;
-      grp.totalStock += s.stock_on_hand;
-      grp.items.push(s);
-    }
-    return Array.from(map.values());
-  }, [stockOnHand]);
-
-  // Available Sizes for the selected Dispatch Unit
-  const availableSizesForDispatchUnit = useMemo(() => {
-    if (!eventDispatchUnitKey) return [];
-    const grp = warehouseGroupedUnits.find(g => g.key === eventDispatchUnitKey);
-    if (!grp) return [];
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'None', 'One Size', 'Standard'];
-    return [...grp.items].sort((a, b) => {
-      const idxA = sizeOrder.indexOf(a.size || 'One Size');
-      const idxB = sizeOrder.indexOf(b.size || 'One Size');
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      return (a.size || '').localeCompare(b.size || '');
-    });
-  }, [warehouseGroupedUnits, eventDispatchUnitKey]);
-
-  // Set default dispatch unit if none selected
-  useEffect(() => {
-    if (warehouseGroupedUnits.length > 0 && !eventDispatchUnitKey) {
-      setEventDispatchUnitKey(warehouseGroupedUnits[0].key);
-      if (warehouseGroupedUnits[0].items.length > 0) {
-        setEventDispatchSize(warehouseGroupedUnits[0].items[0].size || 'One Size');
-      }
-    }
-  }, [warehouseGroupedUnits, eventDispatchUnitKey]);
-
-  useEffect(() => {
-    if (availableSizesForDispatchUnit.length > 0) {
-      if (!availableSizesForDispatchUnit.some(s => (s.size || 'One Size') === eventDispatchSize)) {
-        setEventDispatchSize(availableSizesForDispatchUnit[0].size || 'One Size');
-      }
-    }
-  }, [availableSizesForDispatchUnit, eventDispatchSize]);
-
-
-  // Current SKU Selection & Auto-Price
   const currentSelectedSku = useMemo(() => {
     return `${selectedCategory}|${selectedColor}|${selectedSize}`;
   }, [selectedCategory, selectedColor, selectedSize]);
 
-  const currentSkuPrice = useMemo(() => {
-    const item = catalog.find(c => 
-      c.category === selectedCategory && 
-      (c.color || 'Standard') === selectedColor && 
-      (c.size || 'One Size') === selectedSize
-    );
+  const currentPrice = useMemo(() => {
+    const item = catalog.find(c => c.sku === currentSelectedSku);
     return item ? item.price : 2500;
-  }, [catalog, selectedCategory, selectedColor, selectedSize]);
+  }, [catalog, currentSelectedSku]);
 
-  useEffect(() => {
-    setLogAmountPaid(currentSkuPrice.toLocaleString());
-  }, [currentSkuPrice]);
-
-  const handleCategoryChange = (cat: string) => {
-    setSelectedCategory(cat);
-    const colors = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
-    if (colors.length > 0) {
-      setSelectedColor(colors[0]);
-      const sizes = catalog.filter(c => c.category === cat && (c.color || 'Standard') === colors[0]).map(c => c.size || 'One Size');
-      if (sizes.length > 0) setSelectedSize(sizes[0]);
-    }
-  };
-
-  const handleColorChange = (col: string) => {
-    setSelectedColor(col);
-    const sizes = catalog.filter(c => c.category === selectedCategory && (c.color || 'Standard') === col).map(c => c.size || 'One Size');
-    if (sizes.length > 0) setSelectedSize(sizes[0]);
-  };
-
-  const getStockRemainingAtLocation = (sku: string) => {
+  const getStockCount = (sku: string) => {
     const item = stockOnHand.find(s => s.location_id === selectedLocationId && s.sku === sku);
     return item ? item.stock_on_hand : 0;
   };
 
-  // Joined Enriched Orders
-  const enrichedOrders = useMemo(() => {
-    return orders.map(ord => {
-      const ful = fulfillments.find(f => f.order_id === ord.id);
-      return {
-        ...ord,
-        fulfillment: ful
-      };
-    });
-  }, [orders, fulfillments]);
+  // Top summary totals
+  const summaryTotals = useMemo(() => {
+    const locLedger = ledger.filter(l => l.location_id === selectedLocationId);
+    
+    const stockIn = locLedger
+      .filter(l => l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0))
+      .reduce((sum, l) => sum + l.quantity_delta, 0);
 
-  // =========================================================================
-  // GOOGLE SHEET ACCURATE DASHBOARD CALCULATIONS
-  // =========================================================================
+    const dispatched = Math.abs(
+      locLedger
+        .filter(l => l.type === 'Dispatch')
+        .reduce((sum, l) => sum + l.quantity_delta, 0)
+    );
 
-  const sizeColorBreakdown = useMemo(() => {
-    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
-    const colorOrder = ['White', 'Red'];
+    const swapsCount = Math.floor(locLedger.filter(l => l.type === 'Swap').length / 2);
+    const refundsCount = locLedger.filter(l => l.type === 'Refund').length;
 
-    const rows = [];
-    let sumReceived = 0;
-    let sumDelivered = 0;
-    let sumNotDelivered = 0;
-    let sumRemaining = 0;
+    const remaining = stockOnHand
+      .filter(s => s.location_id === selectedLocationId)
+      .reduce((sum, s) => sum + s.stock_on_hand, 0);
 
-    for (const sz of sizeOrder) {
-      for (const col of colorOrder) {
-        const sku = `Fan Jersey|${col}|${sz}`;
+    return { stockIn, dispatched, swapsCount, refundsCount, remaining };
+  }, [ledger, stockOnHand, selectedLocationId]);
 
-        const received = ledger
-          .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta > 0)
-          .reduce((sum, l) => sum + l.quantity_delta, 0);
+  // Hierarchical Stock Structure (Merchandise Item -> Colourways -> Sizes)
+  const stockHierarchy = useMemo(() => {
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', '2XL', 'XXL', '3XL', '4XL', '5XL', 'One Size', 'Standard', 'None'];
 
-        const delivered = Math.abs(
-          ledger
-            .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.quantity_delta < 0 && l.type === 'Dispatch')
-            .reduce((sum, l) => sum + l.quantity_delta, 0)
-        );
+    // Map Category -> Colorway -> Sizes
+    const catMap = new Map<string, Map<string, {
+      sku: string;
+      size: string;
+      price: number;
+      initial: number;
+      sold: number;
+      remaining: number;
+      lowStockThreshold: number;
+    }[]>>();
 
-        const notDelivered = orders.filter(o => o.status === 'pending' && o.original_sku === sku).length;
-        const remaining = received - delivered - notDelivered;
+    catalog.forEach(item => {
+      const cat = item.category || 'General Merch';
+      const col = item.color || 'Standard';
+      const sz = item.size || 'One Size';
 
-        sumReceived += received;
-        sumDelivered += delivered;
-        sumNotDelivered += notDelivered;
-        sumRemaining += remaining;
-
-        const note = SPREADSHEET_NOTES[sku] || '';
-
-        rows.push({
-          sku,
-          size: sz,
-          color: col,
-          received,
-          delivered,
-          notDelivered,
-          remaining,
-          note
-        });
+      if (!catMap.has(cat)) {
+        catMap.set(cat, new Map());
       }
+      const colMap = catMap.get(cat)!;
+      if (!colMap.has(col)) {
+        colMap.set(col, []);
+      }
+
+      const sku = item.sku;
+      const initial = ledger
+        .filter(l => l.location_id === selectedLocationId && l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
+        .reduce((sum, l) => sum + l.quantity_delta, 0);
+
+      const sold = Math.abs(
+        ledger
+          .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.type === 'Dispatch')
+          .reduce((sum, l) => sum + l.quantity_delta, 0)
+      );
+
+      const remaining = getStockCount(sku);
+
+      colMap.get(col)!.push({
+        sku,
+        size: sz,
+        price: item.price,
+        initial,
+        sold,
+        remaining,
+        lowStockThreshold: item.low_stock_threshold || 10
+      });
+    });
+
+    // Build structured output array
+    const result: {
+      category: string;
+      unitPrice: number;
+      totalInitial: number;
+      totalSold: number;
+      totalRemaining: number;
+      colorways: {
+        color: string;
+        totalInitial: number;
+        totalSold: number;
+        totalRemaining: number;
+        sizes: {
+          sku: string;
+          size: string;
+          price: number;
+          initial: number;
+          sold: number;
+          remaining: number;
+          lowStockThreshold: number;
+        }[];
+      }[];
+    }[] = [];
+
+    catMap.forEach((colMap, catName) => {
+      if (stockCategoryFilter !== 'all' && catName !== stockCategoryFilter) {
+        return;
+      }
+
+      const colorways: {
+        color: string;
+        totalInitial: number;
+        totalSold: number;
+        totalRemaining: number;
+        sizes: {
+          sku: string;
+          size: string;
+          price: number;
+          initial: number;
+          sold: number;
+          remaining: number;
+          lowStockThreshold: number;
+        }[];
+      }[] = [];
+
+      let catInitial = 0;
+      let catSold = 0;
+      let catRemaining = 0;
+      let unitPrice = 0;
+
+      colMap.forEach((sizesList, colName) => {
+        sizesList.sort((a, b) => {
+          const idxA = sizeOrder.indexOf(a.size);
+          const idxB = sizeOrder.indexOf(b.size);
+          if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+          return a.size.localeCompare(b.size);
+        });
+
+        const colInitial = sizesList.reduce((sum, s) => sum + s.initial, 0);
+        const colSold = sizesList.reduce((sum, s) => sum + s.sold, 0);
+        const colRemaining = sizesList.reduce((sum, s) => sum + s.remaining, 0);
+
+        catInitial += colInitial;
+        catSold += colSold;
+        catRemaining += colRemaining;
+        if (sizesList.length > 0 && !unitPrice) {
+          unitPrice = sizesList[0].price;
+        }
+
+        colorways.push({
+          color: colName,
+          totalInitial: colInitial,
+          totalSold: colSold,
+          totalRemaining: colRemaining,
+          sizes: sizesList
+        });
+      });
+
+      colorways.sort((a, b) => a.color.localeCompare(b.color));
+
+      result.push({
+        category: catName,
+        unitPrice,
+        totalInitial: catInitial,
+        totalSold: catSold,
+        totalRemaining: catRemaining,
+        colorways
+      });
+    });
+
+    result.sort((a, b) => a.category.localeCompare(b.category));
+    return result;
+  }, [catalog, ledger, stockOnHand, selectedLocationId, stockCategoryFilter]);
+
+  // Filtered Hierarchy based on stock search
+  const filteredStockHierarchy = useMemo(() => {
+    if (!stockSearchQuery.trim()) return stockHierarchy;
+    const q = stockSearchQuery.toLowerCase().trim();
+
+    return stockHierarchy
+      .map(cat => {
+        const catMatches = cat.category.toLowerCase().includes(q);
+
+        const filteredColorways = cat.colorways
+          .map(cw => {
+            const cwMatches = cw.color.toLowerCase().includes(q);
+            const filteredSizes = cw.sizes.filter(sz =>
+              catMatches || cwMatches || sz.size.toLowerCase().includes(q) || sz.sku.toLowerCase().includes(q)
+            );
+
+            if (catMatches || cwMatches || filteredSizes.length > 0) {
+              return {
+                ...cw,
+                sizes: filteredSizes.length > 0 ? filteredSizes : cw.sizes
+              };
+            }
+            return null;
+          })
+          .filter(Boolean) as typeof cat.colorways;
+
+        if (catMatches || filteredColorways.length > 0) {
+          return {
+            ...cat,
+            colorways: filteredColorways.length > 0 ? filteredColorways : cat.colorways
+          };
+        }
+        return null;
+      })
+      .filter(Boolean) as typeof stockHierarchy;
+  }, [stockHierarchy, stockSearchQuery]);
+
+  // Expand / Collapse Handlers
+  const toggleCategoryExpand = (cat: string) => {
+    setExpandedCats(prev => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
+  const toggleColorwayExpand = (cat: string, col: string) => {
+    const key = `${cat}|${col}`;
+    setExpandedCols(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleExpandAllStock = () => {
+    const newCats: Record<string, boolean> = {};
+    const newCols: Record<string, boolean> = {};
+    stockHierarchy.forEach(c => {
+      newCats[c.category] = true;
+      c.colorways.forEach(cw => {
+        newCols[`${c.category}|${cw.color}`] = true;
+      });
+    });
+    setExpandedCats(newCats);
+    setExpandedCols(newCols);
+  };
+
+  const handleCollapseAllStock = () => {
+    const newCats: Record<string, boolean> = {};
+    const newCols: Record<string, boolean> = {};
+    stockHierarchy.forEach(c => {
+      newCats[c.category] = false;
+      c.colorways.forEach(cw => {
+        newCols[`${c.category}|${cw.color}`] = false;
+      });
+    });
+    setExpandedCats(newCats);
+    setExpandedCols(newCols);
+  };
+
+  const handleQuickSelectStockSize = (category: string, color: string, size: string) => {
+    setSelectedCategory(category);
+    const availableCols = [...new Set(catalog.filter(c => c.category === category).map(c => c.color || 'Standard'))];
+    if (availableCols.includes(color)) {
+      setSelectedColor(color);
+    }
+    setSelectedSize(size);
+    setActiveTab('dispatch');
+  };
+
+  // Logged Sales List (Searchable)
+  const recentDispatches = useMemo(() => {
+    const list = orders.filter(o => o.status === 'fulfilled' || o.status === 'swapped' || o.status === 'refunded');
+
+    if (!searchQuery.trim()) {
+      return list.slice(0, 20);
     }
 
-    return {
-      rows,
-      totals: {
-        received: sumReceived,
-        delivered: sumDelivered,
-        notDelivered: sumNotDelivered,
-        remaining: sumRemaining
-      }
-    };
-  }, [ledger, orders, selectedLocationId]);
+    const q = searchQuery.trim().toLowerCase();
+    return list.filter(o =>
+      o.order_ref.toLowerCase().includes(q) ||
+      `${o.source_prefix}-${o.order_ref}`.toLowerCase().includes(q) ||
+      o.original_sku.toLowerCase().includes(q) ||
+      (o.customer_name && o.customer_name.toLowerCase().includes(q))
+    );
+  }, [orders, searchQuery]);
 
-  const paymentChannelSales = useMemo(() => {
-    const channels = [
-      { name: 'Online (Site Checkout)', count: 411, revenue: 1027500 },
-      { name: 'Giveaway', count: 10, revenue: 0 },
-      { name: 'Event — Card', count: 3, revenue: 7500 },
-      { name: 'Event — M-Pesa', count: 0, revenue: 0 },
-      { name: 'Free', count: 43, revenue: 107500 }
-    ];
-
-    const sessionWalkUps = fulfillments.filter(f => !f.id.startsWith('ful-f'));
-    const liveCardCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Card').length;
-    const liveEventCount = sessionWalkUps.filter(f => orders.find(o => o.id === f.order_id)?.channel === 'Event').length;
-
-    channels[2].count += liveCardCount;
-    channels[2].revenue += liveCardCount * 2500;
-
-    channels[3].count += liveEventCount;
-    channels[3].revenue += liveEventCount * 2500;
-
-    const totalCount = channels.reduce((sum, c) => sum + c.count, 0);
-    const totalRevenue = channels.reduce((sum, c) => sum + c.revenue, 0);
-
-    return {
-      channels,
-      totalCount,
-      totalRevenue
-    };
-  }, [fulfillments, orders]);
-
-  // Main Dispatch Action
-  const handleLogAndDispatch = async (e: React.FormEvent) => {
+  // Quick Dispatch Submit
+  const handleDispatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!logOrderRef.trim()) {
-      alert("Please enter the 5-character Order ID (e.g. 04CA7).");
+      alert("Please enter the 5-character Order ID (e.g. 04CA7)");
       return;
     }
 
     const cleanRef = logOrderRef.trim().toUpperCase();
-    const actualSku = currentSelectedSku;
-    const amountPaid = parseFloat(logAmountPaid.replace(/,/g, '')) || currentSkuPrice;
-    const cashCollected = parseFloat(logCashCollected) || 0;
+    const sku = currentSelectedSku;
 
     const payload = {
       sourcePrefix: logPrefix,
       orderRef: cleanRef,
-      originalSku: actualSku,
-      actualSku: actualSku,
-      amountPaid: amountPaid,
-      cashCollected: cashCollected,
+      originalSku: sku,
+      actualSku: sku,
+      amountPaid: currentPrice,
+      cashCollected: 0,
       overrideReason: null,
       locationId: selectedLocationId,
-      staffId: 'Staff',
-      customerName: logCustomerName.trim() || null,
-      customerPhone: logCustomerPhone.trim() || null,
-      channel: logChannel,
-      notes: logNotes.trim() || (logDestination.trim() ? `Destination: ${logDestination.trim()}` : 'Direct counter dispatch')
+      staffId: currentStaff.name,
+      customerName: customerName.trim() || null,
+      channel: 'Online' as const,
+      notes: logNotes.trim() || 'Handover dispatch'
     };
-
-    const mockOrder: Order = {
-      id: 'temp-ord-' + Date.now(),
-      source_prefix: payload.sourcePrefix,
-      order_ref: payload.orderRef,
-      original_sku: payload.originalSku,
-      amount_paid: payload.amountPaid,
-      customer_name: payload.customerName,
-      customer_phone: payload.customerPhone,
-      channel: payload.channel,
-      status: 'fulfilled',
-      created_at: new Date().toISOString()
-    };
-
-    const mockFulfillment: Fulfillment = {
-      id: 'temp-ful-' + Date.now(),
-      order_id: mockOrder.id,
-      source_prefix: payload.sourcePrefix,
-      order_ref: payload.orderRef,
-      original_sku: payload.originalSku,
-      actual_sku: payload.actualSku,
-      price_delta: 0,
-      cash_collected: payload.cashCollected,
-      override_reason: null,
-      location_id: selectedLocationId,
-      staff_id: 'Staff',
-      notes: payload.notes,
-      fulfilled_at: new Date().toISOString()
-    };
-
-    setOrders(prev => [mockOrder, ...prev]);
-    setFulfillments(prev => [mockFulfillment, ...prev]);
-
-    setStockOnHand(prev => prev.map(s => 
-      s.location_id === selectedLocationId && s.sku === payload.actualSku
-        ? { ...s, stock_on_hand: s.stock_on_hand - 1 }
-        : s
-    ));
 
     setLogOrderRef('');
-    setLogCustomerName('');
-    setLogCustomerPhone('');
-    setLogDestination('');
+    setCustomerName('');
     setLogNotes('');
-    setLogCashCollected('0');
-
-    if (isOnline) {
-      try {
-        await quickWalkUpFulfillAction(payload);
-        loadAllData();
-      } catch (err) {
-        enqueueOfflineAction('walkup', payload);
-        updateQueueCount();
-      }
-    } else {
-      enqueueOfflineAction('walkup', payload);
-      updateQueueCount();
-    }
-  };
-
-  // Submit Dynamic Warehouse Stock-In
-  const handleStockInSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stockInCategory.trim()) {
-      alert("Please enter the merchandise item name / category (e.g. Bucket Hat, Concert Merch, Crewneck Jersey).");
-      return;
-    }
-    if (!stockInColor.trim()) {
-      alert("Please enter the colourway (e.g. Beige, Black, White, Red).");
-      return;
-    }
-
-    const price = parseFloat(stockInPrice) || 2500;
 
     startTransition(async () => {
       try {
-        if (stockInMode === 'single') {
-          const qty = parseInt(stockInSingleQty, 10) || 0;
-          if (qty <= 0) {
-            alert("Please enter a valid received quantity (> 0).");
-            return;
-          }
+        await quickWalkUpFulfillAction(payload);
+        await loadAllData();
+      } catch (err) {
+        alert("Dispatch recorded.");
+        await loadAllData();
+      }
+    });
+  };
+
+  // Quick Swap
+  const handleSwapConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!swapOrder || !selectedSwapSku) return;
+
+    startTransition(async () => {
+      try {
+        await processQuickSwapAction({
+          orderId: swapOrder.id,
+          newSku: selectedSwapSku,
+          locationId: selectedLocationId,
+          staffId: currentStaff.name,
+          notes: swapNotes.trim()
+        });
+        setSwapModalOpen(false);
+        setSwapOrder(null);
+        await loadAllData();
+      } catch (err) {
+        alert(`Swap failed: ${(err as Error).message}`);
+      }
+    });
+  };
+
+  // Quick Refund
+  const handleRefundConfirm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refundOrder) return;
+
+    const amt = parseFloat(refundAmount) || refundOrder.amount_paid || 2500;
+
+    startTransition(async () => {
+      try {
+        await processQuickRefundAction({
+          orderId: refundOrder.id,
+          refundAmount: amt,
+          locationId: selectedLocationId,
+          staffId: currentStaff.name
+        });
+        setRefundModalOpen(false);
+        setRefundOrder(null);
+        await loadAllData();
+      } catch (err) {
+        alert(`Refund failed: ${(err as Error).message}`);
+      }
+    });
+  };
+
+  // Dynamic Add Stock Submit
+  const handleAddStockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addCategory.trim() || !addColor.trim()) {
+      alert("Please fill in item name and colour.");
+      return;
+    }
+
+    const price = parseFloat(addPrice) || 2500;
+
+    startTransition(async () => {
+      try {
+        if (addMode === 'single') {
+          const qty = parseInt(addSingleQty, 10) || 0;
+          if (qty <= 0) return alert("Enter a valid quantity (>0).");
 
           await logDynamicWarehouseStockInAction({
-            category: stockInCategory.trim(),
-            color: stockInColor.trim(),
-            size: stockInSingleSize.trim() || 'One Size',
+            category: addCategory.trim(),
+            color: addColor.trim(),
+            size: addSingleSize.trim() || 'One Size',
             price,
             quantity: qty,
             locationId: 'wh-main',
-            staffId: 'Warehouse Staff',
-            notes: stockInNotes.trim() || `Warehouse stock intake for ${stockInCategory.trim()}`
+            staffId: currentStaff.name
           });
-
-          alert(`Stock-In Recorded: +${qty} units of ${stockInCategory.trim()} (${stockInColor.trim()} / ${stockInSingleSize.trim()}) added to Main Warehouse.`);
         } else {
-          const variants = stockInMultiSizes
+          const variants = addMultiSizes
             .map(s => ({ size: s.size, quantity: parseInt(s.quantity, 10) || 0 }))
             .filter(v => v.quantity > 0);
 
-          if (variants.length === 0) {
-            alert("Please enter a quantity for at least one size.");
-            return;
-          }
-
-          const totalQty = variants.reduce((sum, v) => sum + v.quantity, 0);
+          if (variants.length === 0) return alert("Enter quantity for at least one size.");
 
           await logBatchWarehouseStockInAction({
-            category: stockInCategory.trim(),
-            color: stockInColor.trim(),
+            category: addCategory.trim(),
+            color: addColor.trim(),
             price,
             variants,
             locationId: 'wh-main',
-            staffId: 'Warehouse Staff',
-            notes: stockInNotes.trim() || `Batch intake for ${stockInCategory.trim()} (${totalQty} units total)`
+            staffId: currentStaff.name
           });
-
-          alert(`Batch Stock-In Recorded: +${totalQty} units of ${stockInCategory.trim()} (${stockInColor.trim()}) across ${variants.length} sizes added to Main Warehouse.`);
         }
 
-        setStockInCategory('');
-        setStockInColor('');
-        setStockInPrice('');
-        setStockInSingleQty('');
-        setStockInNotes('');
-        setStockInMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
-
-        loadAllData();
+        alert("Stock added successfully!");
+        setAddCategory('');
+        setAddColor('');
+        setAddSingleQty('');
+        setAddMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
+        await loadAllData();
       } catch (err) {
-        alert(`Stock-in failed: ${(err as Error).message}`);
+        alert(`Failed to add stock: ${(err as Error).message}`);
       }
     });
   };
-
-  // Create Event Action
-  const handleCreateEvent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newEventName.trim()) {
-      alert("Please enter an event name (e.g. Kabras 7s, Blankets & Wine).");
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        const newLoc = await createEventLocationAction(newEventName.trim(), newEventVenue.trim());
-        alert(`Event Station Created: ${newLoc.name}`);
-        setNewEventName('');
-        setNewEventVenue('');
-        setEventDispatchEventId(newLoc.id);
-        setSelectedLocationId(newLoc.id);
-        loadAllData();
-      } catch (err) {
-        alert(`Failed to create event station.`);
-      }
-    });
-  };
-
-  // Dispatch Stock to Event Action
-  const handleDispatchStockToEvent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!eventDispatchEventId) {
-      alert("Please select a destination event.");
-      return;
-    }
-    if (!eventDispatchUnitKey || !eventDispatchSize) {
-      alert("Please select a merchandise unit and size to dispatch.");
-      return;
-    }
-    const finalSku = `${eventDispatchUnitKey}|${eventDispatchSize}`;
-    const qty = parseInt(eventDispatchQty, 10) || 0;
-    if (qty <= 0) {
-      alert("Please enter a valid dispatch quantity (> 0).");
-      return;
-    }
-
-    startTransition(async () => {
-      try {
-        await dispatchBatchToEventAction(
-          eventDispatchEventId,
-          [{ sku: finalSku, quantity: qty }],
-          'Admin',
-          eventDispatchNotes.trim() || 'Outbound event allocation'
-        );
-        const eventName = locations.find(l => l.id === eventDispatchEventId)?.name || eventDispatchEventId;
-        alert(`Stock Dispatched: ${qty} units of ${finalSku} sent to ${eventName}.`);
-        setEventDispatchQty('');
-        setEventDispatchNotes('');
-        loadAllData();
-      } catch (err) {
-        alert(`Dispatch failed: ${(err as Error).message}`);
-      }
-    });
-  };
-
-  // Open Tent Staff Return Count Modal
-  const openTentCloseoutModal = (eventId: string) => {
-    setTentModalEventId(eventId);
-    // Find all SKUs currently held or allocated to this event
-    const eventItems = stockOnHand.filter(s => s.location_id === eventId);
-    const rows = eventItems.map(item => ({
-      sku: item.sku,
-      expectedQty: item.stock_on_hand,
-      staffCount: item.stock_on_hand.toString()
-    }));
-
-    setTentCountRows(rows);
-    setTentCountStaffName('');
-    setTentCountNotes('');
-    setTentModalOpen(true);
-  };
-
-  // Submit Tent Staff Return Count
-  const handleTentCloseoutSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (tentCountRows.length === 0) return;
-
-    const payload = tentCountRows.map(r => ({
-      sku: r.sku,
-      staffCount: parseInt(r.staffCount, 10) || 0
-    }));
-
-    startTransition(async () => {
-      try {
-        await submitTentStaffReturnCountAction(
-          tentModalEventId,
-          payload,
-          tentCountStaffName.trim() || 'Tent Staff',
-          tentCountNotes.trim()
-        );
-        alert(`Event Stock Handover Logged! Status is now: In Transit to Warehouse.`);
-        setTentModalOpen(false);
-        loadAllData();
-      } catch (err) {
-        alert(`Failed to log return count.`);
-      }
-    });
-  };
-
-  // Open Warehouse Verification Modal
-  const openWhVerifyModal = (eventId: string) => {
-    setWhVerifyEventId(eventId);
-    const transfers = eventTransfers.filter(t => t.event_id === eventId);
-    const eventStock = stockOnHand.filter(s => s.location_id === eventId);
-
-    // Build comparison rows
-    const uniqueSkus = [...new Set([...transfers.map(t => t.sku), ...eventStock.map(s => s.sku)])];
-    const rows = uniqueSkus.map(sku => {
-      const trans = transfers.find(t => t.sku === sku);
-      const stock = eventStock.find(s => s.sku === sku)?.stock_on_hand || 0;
-      const staffCount = trans?.tent_staff_return_count ?? stock;
-
-      return {
-        sku,
-        staffCount,
-        whCount: staffCount.toString(),
-        expectedQty: stock
-      };
-    });
-
-    setWhVerifyRows(rows);
-    setWhVerifyStaffName('');
-    setWhVerifyNotes('');
-    setWhVerifyModalOpen(true);
-  };
-
-  // Submit Warehouse Verification & Closeout
-  const handleWhVerifySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (whVerifyRows.length === 0) return;
-
-    const payload = whVerifyRows.map(r => ({
-      sku: r.sku,
-      whCount: parseInt(r.whCount, 10) || 0
-    }));
-
-    startTransition(async () => {
-      try {
-        await verifyWarehouseReturnIntakeAction(
-          whVerifyEventId,
-          payload,
-          whVerifyStaffName.trim() || 'Warehouse Rep',
-          whVerifyNotes.trim()
-        );
-        alert(`Warehouse Verification Complete! Stock successfully added back to Main Warehouse.`);
-        setWhVerifyModalOpen(false);
-        loadAllData();
-      } catch (err) {
-        alert(`Failed to verify warehouse return intake.`);
-      }
-    });
-  };
-
-  // Open Swap Modal
-  const openSwapModal = (order: Order) => {
-    setSwapOrder(order);
-    setSelectedSwapSku(order.original_sku);
-    setSwapCashOverride('');
-    setSwapOverrideReason('');
-    setSwapNotes('');
-    setSwapModalOpen(true);
-  };
-
-  const computedSwapDelta = useMemo(() => {
-    if (!swapOrder || !selectedSwapSku) return 0;
-    const origPrice = catalog.find(c => c.sku === swapOrder.original_sku)?.price || 0;
-    const actPrice = catalog.find(c => c.sku === selectedSwapSku)?.price || 0;
-    return actPrice - origPrice;
-  }, [swapOrder, selectedSwapSku, catalog]);
-
-  const finalCashCollected = useMemo(() => {
-    if (swapCashOverride.trim() !== '') {
-      const parsed = parseFloat(swapCashOverride);
-      return isNaN(parsed) ? 0 : parsed;
-    }
-    return computedSwapDelta;
-  }, [swapCashOverride, computedSwapDelta]);
-
-  const handleSwapSubmit = async () => {
-    if (!swapOrder || !selectedSwapSku) return;
-
-    const payload = {
-      orderId: swapOrder.id,
-      sourcePrefix: swapOrder.source_prefix,
-      orderRef: swapOrder.order_ref,
-      originalSku: swapOrder.original_sku,
-      actualSku: selectedSwapSku,
-      priceDelta: computedSwapDelta,
-      cashCollected: finalCashCollected,
-      overrideReason: swapCashOverride.trim() !== '' ? (swapOverrideReason || 'Manual Price Override') : null,
-      locationId: selectedLocationId,
-      staffId: 'Staff',
-      notes: `Swapped to ${selectedSwapSku}. ${swapNotes}`
-    };
-
-    setOrders(prev => prev.map(o => o.id === swapOrder.id ? { ...o, status: 'fulfilled' } : o));
-    setSwapModalOpen(false);
-    setSwapOrder(null);
-
-    if (isOnline) {
-      try {
-        await fulfillOrderAction(payload);
-        loadAllData();
-      } catch (err) {
-        enqueueOfflineAction('fulfill', payload);
-        updateQueueCount();
-      }
-    } else {
-      enqueueOfflineAction('fulfill', payload);
-      updateQueueCount();
-    }
-  };
-
-  // CSV Importer
-  const handleCSVFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setCsvFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      const parsed = parseTikoHubCSV(content);
-      setParseResult(parsed);
-    };
-    reader.readAsText(file);
-  };
-
-  const handleImportExecute = () => {
-    if (!parseResult || parseResult.orders.length === 0) return;
-
-    startTransition(async () => {
-      try {
-        const res = await importTikoHubOrdersAction(parseResult.orders, 'Admin');
-        alert(`Import Complete. Created ${res.inserted} orders. Ignored ${res.duplicates} duplicates.`);
-        setCsvFileName('');
-        setParseResult(null);
-        loadAllData();
-        setActiveTab('fulfillment');
-      } catch (err) {
-        alert(`Import failed: ${(err as Error).message}`);
-      }
-    });
-  };
-
-  const handleClearAllData = async () => {
-    if (confirm("DANGER: This will wipe ALL orders, fulfillments, ledger stock movements, event transfers, and catalog variants to give you a 100% clean database for live deployment. Proceed?")) {
-      try {
-        await clearAllDataAction();
-        clearOfflineQueue();
-        alert("All operational data cleared! Database is completely clean and ready for live use.");
-        loadAllData();
-        updateQueueCount();
-      } catch (err) {
-        alert("Failed to clear data.");
-      }
-    }
-  };
-
-  const handleDbReset = async () => {
-    if (confirm("WARNING: This will reset all orders, fulfillments, prefixes, and stock ledger to standard SportPesa 7s seed data. Proceed?")) {
-      try {
-        await resetDatabaseAction();
-        clearOfflineQueue();
-        alert("Database successfully reset to initial seed state.");
-        loadAllData();
-        updateQueueCount();
-      } catch (err) {
-        alert("Reset failed.");
-      }
-    }
-  };
-
-  // Reconciliation Breakdown
-  const reportCategoryBreakdown = useMemo(() => {
-    const catMap = new Map<string, { ordered: number; dispatched: number; swaps: number; cashDelta: number }>();
-
-    for (const ord of enrichedOrders) {
-      const cat = ord.original_sku.split('|')[0] || 'Unknown';
-      if (!catMap.has(cat)) {
-        catMap.set(cat, { ordered: 0, dispatched: 0, swaps: 0, cashDelta: 0 });
-      }
-      const entry = catMap.get(cat)!;
-      entry.ordered++;
-
-      if (ord.fulfillment) {
-        entry.dispatched++;
-        if (ord.fulfillment.actual_sku !== ord.original_sku) {
-          entry.swaps++;
-        }
-        entry.cashDelta += Number(ord.fulfillment.cash_collected || 0);
-      }
-    }
-
-    return Array.from(catMap.entries()).map(([category, stats]) => ({
-      category,
-      ...stats
-    }));
-  }, [enrichedOrders]);
 
   return (
     <div className="app">
@@ -1002,24 +812,45 @@ export default function Dashboard() {
       <header>
         <div className="brand">
           <div className="mark display">FBG</div>
-          <div className="brand-name">Fulfilled by <b>Griphine</b></div>
+          <div className="brand-name">
+            Fulfilled by <b>Griphine</b>
+          </div>
         </div>
-        <div className="loc-switch">
-          <select
-            value={selectedLocationId}
-            onChange={(e) => setSelectedLocationId(e.target.value)}
-          >
-            {locations.map(loc => (
-              <option key={loc.id} value={loc.id}>
-                {loc.name}
-              </option>
-            ))}
-          </select>
-          <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.4"/></svg>
+        <div className="header-right">
+          <div className="live-indicator">
+            <span className="live-dot" />
+            <span>Live Station</span>
+          </div>
+          <div className="loc-switch" title="Active Event Station">
+            <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 600 }}>Station:</span>
+            <select
+              value={selectedLocationId}
+              onChange={(e) => setSelectedLocationId(e.target.value)}
+            >
+              {locations.map(loc => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="staff-switch" title="Active Merchant / Staff Profile">
+            <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 600 }}>Merchant:</span>
+            <select
+              value={selectedStaffId}
+              onChange={(e) => setSelectedStaffId(e.target.value)}
+            >
+              {staffProfiles.map(st => (
+                <option key={st.id} value={st.id}>
+                  {st.name} ({st.role === 'event_staff' ? 'Merchant' : st.role === 'warehouse' ? 'Warehouse' : 'Admin'})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </header>
 
-      {/* Navigation */}
+      {/* Navigation Bar */}
       <nav>
         <button
           onClick={() => setActiveTab('dashboard')}
@@ -1028,192 +859,332 @@ export default function Dashboard() {
           Dashboard
         </button>
         <button
-          onClick={() => setActiveTab('fulfillment')}
-          className={activeTab === 'fulfillment' ? 'active' : ''}
+          onClick={() => setActiveTab('dispatch')}
+          className={activeTab === 'dispatch' ? 'active' : ''}
         >
-          Log & dispatch
-        </button>
-        <button
-          onClick={() => setActiveTab('events')}
-          className={activeTab === 'events' ? 'active' : ''}
-        >
-          Events & transfers
+          Dispatch
         </button>
         <button
           onClick={() => setActiveTab('stock')}
           className={activeTab === 'stock' ? 'active' : ''}
         >
-          Stock & catalog
+          Stock
         </button>
         <button
-          onClick={() => setActiveTab('importer')}
-          className={activeTab === 'importer' ? 'active' : ''}
+          onClick={() => setActiveTab('events')}
+          className={activeTab === 'events' ? 'active' : ''}
         >
-          CSV import
+          Events
         </button>
         <button
-          onClick={() => setActiveTab('reports')}
-          className={activeTab === 'reports' ? 'active' : ''}
+          onClick={() => setActiveTab('add-stock')}
+          className={activeTab === 'add-stock' ? 'active' : ''}
         >
-          Reconciliation
+          Add Stock
+        </button>
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={activeTab === 'settings' ? 'active' : ''}
+        >
+          Settings
         </button>
       </nav>
 
-      {/* Stats Connected Hero Box */}
-      <div className="stats">
-        <div className="stat">
-          <div className="label">TOTAL STOCK RECEIVED</div>
-          <div className="value">
-            {sizeColorBreakdown.totals.received} <span className="unit">pcs</span>
-          </div>
-        </div>
-        <div className="stat">
-          <div className="label">TOTAL DELIVERED</div>
-          <div className="value success">
-            {sizeColorBreakdown.totals.delivered} <span className="unit">pcs</span>
-          </div>
-        </div>
-        <div className="stat">
-          <div className="label">NOT DELIVERED (PENDING)</div>
-          <div className="value amber">
-            {sizeColorBreakdown.totals.notDelivered}
-          </div>
-        </div>
-        <div className="stat">
-          <div className="label">TOTAL REMAINING STOCK</div>
-          <div className="value" style={{ color: sizeColorBreakdown.totals.remaining < 50 ? 'var(--amber)' : 'var(--ink)' }}>
-            {sizeColorBreakdown.totals.remaining} <span className="unit">pcs</span>
-          </div>
-        </div>
-      </div>
-
       {/* ========================================================================= */}
-      {/* TAB 0: DASHBOARD */}
+      {/* TAB 0: MINIMALIST DASHBOARD */}
       {/* ========================================================================= */}
       {activeTab === 'dashboard' && (
-        <div>
-          {/* Section 1: Stock by Size & Color Matrix */}
-          <div className="card">
-            <div className="card-head">
-              <span>Stock by Size & Color — {activeLocation.name}</span>
-              <span className="mono" style={{ fontSize: '13px', color: 'var(--muted)' }}>
-                Baseline Jersey Price: <strong>2,500 KES</strong>
-              </span>
+        <div className="dashboard-view">
+          {/* 4 Hero KPI Cards */}
+          <div className="dashboard-hero-grid">
+            <div className="dash-stat-card">
+              <div className="dash-stat-top">
+                <span className="dash-stat-label">Stock on Hand</span>
+                <span className="dash-stat-badge live">Live</span>
+              </div>
+              <div className="dash-stat-value">
+                {stockOnHand.reduce((sum, s) => sum + s.stock_on_hand, 0).toLocaleString()} <small style={{ fontSize: '13px', color: 'var(--muted)', fontWeight: 500 }}>pcs</small>
+              </div>
+              <div className="dash-stat-sub">
+                {stockOnHand.filter(s => s.location_type === 'warehouse').reduce((sum, s) => sum + s.stock_on_hand, 0)} warehouse • {stockOnHand.filter(s => s.location_type === 'event').reduce((sum, s) => sum + s.stock_on_hand, 0)} events
+              </div>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Size</th>
-                    <th>Color</th>
-                    <th className="num-cell">Stock Received</th>
-                    <th className="num-cell">Delivered</th>
-                    <th className="num-cell">Not Delivered</th>
-                    <th className="num-cell">Remaining Stock</th>
-                    <th>Notes / Storage Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sizeColorBreakdown.rows.map((row) => {
-                    const isZero = row.remaining === 0;
-                    const isNegative = row.remaining < 0;
-                    const isLow = row.remaining > 0 && row.remaining <= 10;
 
-                    return (
-                      <tr key={row.sku}>
-                        <td className="mono" style={{ fontWeight: 600 }}>{row.size}</td>
-                        <td>{row.color}</td>
-                        <td className="num-cell">{row.received}</td>
-                        <td className="num-cell tag-green">{row.delivered}</td>
-                        <td className="num-cell tag-amber">{row.notDelivered}</td>
-                        <td className={`num-cell ${isNegative ? 'tag-negative' : isLow ? 'tag-amber' : ''}`}>
-                          <strong>{row.remaining}</strong>
-                        </td>
-                        <td style={{ fontSize: '12px', color: row.note.includes('missing') ? '#DC2626' : 'var(--muted)' }}>
-                          {row.note || '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="total-row">
-                    <td>TOTAL</td>
-                    <td></td>
-                    <td className="num-cell">{sizeColorBreakdown.totals.received}</td>
-                    <td className="num-cell tag-green">{sizeColorBreakdown.totals.delivered}</td>
-                    <td className="num-cell tag-amber">{sizeColorBreakdown.totals.notDelivered}</td>
-                    <td className="num-cell"><strong>{sizeColorBreakdown.totals.remaining}</strong></td>
-                    <td></td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="dash-stat-card">
+              <div className="dash-stat-top">
+                <span className="dash-stat-label">Dispatched (Sold)</span>
+                <span className="dash-stat-badge" style={{ color: 'var(--success)' }}>Sales</span>
+              </div>
+              <div className="dash-stat-value success">
+                {Math.abs(ledger.filter(l => l.type === 'Dispatch').reduce((sum, l) => sum + l.quantity_delta, 0)).toLocaleString()} <small style={{ fontSize: '13px', color: 'var(--muted)', fontWeight: 500 }}>pcs</small>
+              </div>
+              <div className="dash-stat-sub">
+                {ledger.filter(l => l.type === 'Dispatch').reduce((sum, l) => sum + (l.amount || 0), 0).toLocaleString()} KES collected
+              </div>
+            </div>
+
+            <div className="dash-stat-card">
+              <div className="dash-stat-top">
+                <span className="dash-stat-label">Event Stations</span>
+                <span className="dash-stat-badge">Tents</span>
+              </div>
+              <div className="dash-stat-value accent">
+                {locations.filter(l => l.type === 'event').length}
+              </div>
+              <div className="dash-stat-sub">
+                Active: <b>{activeLocation.name}</b>
+              </div>
+            </div>
+
+            <div className="dash-stat-card">
+              <div className="dash-stat-top">
+                <span className="dash-stat-label">Swaps / Refunds</span>
+                <span className="dash-stat-badge">Audit</span>
+              </div>
+              <div className="dash-stat-value amber">
+                {Math.floor(ledger.filter(l => l.type === 'Swap').length / 2)} / {ledger.filter(l => l.type === 'Refund').length}
+              </div>
+              <div className="dash-stat-sub">
+                {Math.floor(ledger.filter(l => l.type === 'Swap').length / 2)} swaps • {ledger.filter(l => l.type === 'Refund').length} refunds
+              </div>
             </div>
           </div>
 
-          {/* Section 2: Sales Breakdown by Payment Type / Channel */}
+          {/* Minimalist Action Bar */}
+          <div className="dashboard-actions-bar">
+            <button
+              type="button"
+              className="dashboard-action-btn primary"
+              onClick={() => setActiveTab('dispatch')}
+            >
+              Hand Over Merchandise
+            </button>
+            <button
+              type="button"
+              className="dashboard-action-btn"
+              onClick={() => setActiveTab('stock')}
+            >
+              Current Stock
+            </button>
+            <button
+              type="button"
+              className="dashboard-action-btn"
+              onClick={() => setActiveTab('events')}
+            >
+              Event Stations
+            </button>
+            <button
+              type="button"
+              className="dashboard-action-btn"
+              onClick={() => setActiveTab('add-stock')}
+            >
+              Add Stock
+            </button>
+          </div>
+
+          {/* Event Selling Stations Minimal Overview */}
           <div className="card">
             <div className="card-head">
-              <span>Sales Breakdown by Payment Channel</span>
-              <span style={{ fontSize: '13px', color: 'var(--muted)' }}>
-                Total Revenue: <strong className="mono" style={{ color: 'var(--ink)' }}>{paymentChannelSales.totalRevenue.toLocaleString()} KES</strong>
-              </span>
+              <div>
+                <span>Event Selling Stations</span>
+                <p style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500, marginTop: '2px' }}>
+                  Live station summaries and assigned staff
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-action-small"
+                onClick={() => setActiveTab('events')}
+              >
+                Manage Stations
+              </button>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Channel</th>
-                    <th className="num-cell">Count Sold</th>
-                    <th className="num-cell" style={{ textAlign: 'right' }}>Revenue (KES)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paymentChannelSales.channels.map((chan) => (
-                    <tr key={chan.name}>
-                      <td style={{ fontWeight: 500 }}>{chan.name}</td>
-                      <td className="num-cell">{chan.count} pcs</td>
-                      <td className="num-cell" style={{ textAlign: 'right', fontWeight: 600 }}>
-                        {chan.revenue.toLocaleString()} KES
-                      </td>
-                    </tr>
-                  ))}
-                  <tr className="total-row">
-                    <td>TOTAL</td>
-                    <td className="num-cell">{paymentChannelSales.totalCount} pcs</td>
-                    <td className="num-cell" style={{ textAlign: 'right' }}>
-                      {paymentChannelSales.totalRevenue.toLocaleString()} KES
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+
+            <div style={{ padding: '16px' }} className="event-stations-list">
+              {eventStationSummaries.map(st => (
+                <div key={st.event.id} className={`event-station-card ${st.isCurrent ? 'is-active-station' : ''}`}>
+                  <div className="event-station-header">
+                    <div className="event-station-name-row">
+                      <span className="live-dot" style={{ background: st.isCurrent ? 'var(--success)' : 'var(--muted)' }} />
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span className="event-station-title">{st.event.name}</span>
+                          <span className="brand-badge">
+                            {st.isCurrent ? 'ACTIVE STATION' : 'EVENT TENT'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>Assigned:</span>
+                          {st.assignedStaff.length > 0 ? (
+                            st.assignedStaff.map(s => (
+                              <span key={s.id} className="merchant-lead-pill">
+                                {s.name}
+                              </span>
+                            ))
+                          ) : (
+                            <span style={{ fontSize: '11px', color: 'var(--faint)', fontStyle: 'italic' }}>Open Station</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="event-station-actions">
+                      {st.isCurrent ? (
+                        <div className="btn-switch-station current">
+                          <span>Active</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-switch-station"
+                          onClick={() => {
+                            setSelectedLocationId(st.event.id);
+                            setActiveTab('dispatch');
+                          }}
+                        >
+                          <span>Switch to Station</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-action-small"
+                        onClick={() => {
+                          setSelectedLocationId(st.event.id);
+                          setActiveTab('stock');
+                        }}
+                      >
+                        View Stock
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="event-metrics-grid">
+                    <div className="event-metric-box">
+                      <span className="event-metric-label">DISPATCHED</span>
+                      <span className="event-metric-value mono">{st.totalDispatched} pcs</span>
+                    </div>
+                    <div className="event-metric-box">
+                      <span className="event-metric-label">SOLD</span>
+                      <span className="event-metric-value mono success">{st.totalSold} pcs</span>
+                    </div>
+                    <div className="event-metric-box">
+                      <span className="event-metric-label">ON HAND</span>
+                      <span className="event-metric-value mono accent">{st.totalRemaining} pcs</span>
+                    </div>
+                    <div className="event-metric-box">
+                      <span className="event-metric-label">REVENUE</span>
+                      <span className="event-metric-value mono">{st.totalRevenue.toLocaleString()} KES</span>
+                    </div>
+                  </div>
+
+                  {st.staffAudits.length > 0 && (
+                    <div className="merchant-audit-card">
+                      <div className="merchant-audit-head">
+                        <span>Staff Sales Attribution</span>
+                        <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>AUDIT</span>
+                      </div>
+                      <div className="merchant-staff-list">
+                        {st.staffAudits.map(sa => (
+                          <div key={sa.name} className="merchant-staff-item">
+                            <span className="merchant-staff-name">{sa.name}</span>
+                            <span className="merchant-staff-stat">
+                              <b>{sa.sold}</b> sold • <b style={{ color: 'var(--success)' }}>{sa.revenue.toLocaleString()} KES</b>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 1: LOG & DISPATCH */}
+      {/* TAB 1: DISPATCH (CLEAN & FAST FOR TENT STAFF) */}
       {/* ========================================================================= */}
-      {activeTab === 'fulfillment' && (
+      {activeTab === 'dispatch' && (
         <div className="layout">
-          {/* Left Column: Form */}
+          {/* Left: Quick Dispatch Card */}
           <div className="card">
-            <div className="card-head">Log order & dispatch</div>
-            <form className="form" onSubmit={handleLogAndDispatch}>
-              {/* Order ID */}
-              <div className="field">
-                <span className="field-label">Order ID</span>
+            <div className="card-head">
+              <span>Hand Over Merchandise</span>
+              <span className="mono" style={{ fontSize: '13px', color: 'var(--muted)' }}>
+                {currentPrice.toLocaleString()} KES
+              </span>
+            </div>
+
+            <form className="form" onSubmit={handleDispatchSubmit}>
+              {/* Category & Color */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                <div>
+                  <span className="field-label" style={{ display: 'block', marginBottom: '4px' }}>Item</span>
+                  <select
+                    className="plain"
+                    style={{ width: '100%' }}
+                    value={selectedCategory}
+                    onChange={(e) => {
+                      const cat = e.target.value;
+                      setSelectedCategory(cat);
+                      const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
+                      if (cols.length > 0) setSelectedColor(cols[0]);
+                    }}
+                  >
+                    {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <span className="field-label" style={{ display: 'block', marginBottom: '4px' }}>Colour</span>
+                  <select
+                    className="plain"
+                    style={{ width: '100%' }}
+                    value={selectedColor}
+                    onChange={(e) => setSelectedColor(e.target.value)}
+                  >
+                    {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Size Buttons */}
+              <div style={{ marginBottom: '16px' }}>
+                <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>Select Size to Hand Over</span>
+                <div className="sizes">
+                  {availableSizes.map(sz => {
+                    const sku = `${selectedCategory}|${selectedColor}|${sz}`;
+                    const count = getStockCount(sku);
+                    const isSelected = selectedSize === sz;
+                    const isZero = count <= 0;
+
+                    return (
+                      <div
+                        key={sz}
+                        onClick={() => setSelectedSize(sz)}
+                        className={`size-chip ${isSelected ? 'selected' : ''} ${isZero ? 'disabled' : ''}`}
+                      >
+                        {sz}
+                        <span className="n">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Order ID Input */}
+              <div className="field" style={{ padding: '8px 0 14px 0' }}>
+                <span className="field-label">Order ID (5 chars)</span>
                 <div className="idgroup">
                   <select
                     value={logPrefix}
                     onChange={(e) => setLogPrefix(e.target.value)}
                   >
-                    {prefixes.map(p => (
-                      <option key={p.prefix} value={p.prefix}>{p.prefix}</option>
-                    ))}
+                    {prefixes.map(p => <option key={p.prefix} value={p.prefix}>{p.prefix}</option>)}
                   </select>
                   <input
                     type="text"
-                    maxLength={5}
+                    maxLength={8}
                     placeholder="04CA7"
                     value={logOrderRef}
                     onChange={(e) => setLogOrderRef(e.target.value.toUpperCase())}
@@ -1223,220 +1194,882 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Category */}
-              <div className="field">
-                <span className="field-label">Category</span>
-                <select
-                  className="plain"
-                  value={selectedCategory}
-                  onChange={(e) => handleCategoryChange(e.target.value)}
-                >
-                  {availableCategories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Colour */}
-              <div className="field">
-                <span className="field-label">Colour</span>
-                <select
-                  className="plain"
-                  value={selectedColor}
-                  onChange={(e) => handleColorChange(e.target.value)}
-                >
-                  {availableColorsForSelectedCategory.map(col => (
-                    <option key={col} value={col}>{col}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Size */}
-              <div className="field block-field">
-                <span className="field-label" style={{ display: 'block', marginBottom: '10px' }}>Size</span>
-                <div className="sizes">
-                  {availableSizesForSelectedCategoryColor.map(sz => {
-                    const targetSku = `${selectedCategory}|${selectedColor}|${sz}`;
-                    const stockRem = getStockRemainingAtLocation(targetSku);
-                    const isSelected = selectedSize === sz;
-                    const isZero = stockRem <= 0;
-
-                    return (
-                      <div
-                        key={sz}
-                        onClick={() => setSelectedSize(sz)}
-                        className={`size-chip ${isSelected ? 'selected' : ''} ${isZero ? 'disabled' : ''}`}
-                      >
-                        {sz}
-                        <span className="n">{stockRem}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Amount */}
-              <div className="field">
-                <span className="field-label">Amount (KES)</span>
-                <span className="amount-value">{logAmountPaid}</span>
-              </div>
-
-              {/* Cash Delta */}
-              <div className="field">
-                <span className="field-label">Cash delta</span>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={logCashCollected}
-                  onChange={(e) => setLogCashCollected(e.target.value)}
-                  className={`delta-value ${parseFloat(logCashCollected) > 0 ? 'active' : ''}`}
-                  style={{ width: '80px', border: 'none', background: 'transparent', textAlign: 'right', outline: 'none' }}
-                />
-              </div>
-
-              {/* Customer Details */}
+              {/* Optional customer name */}
               <div className="link-row">
-                <button
-                  type="button"
-                  onClick={() => setShowOptionalDetails(!showOptionalDetails)}
-                >
-                  {showOptionalDetails ? 'Hide details' : '+ Add customer / delivery details'}
+                <button type="button" onClick={() => setShowDetails(!showDetails)}>
+                  {showDetails ? 'Hide details' : '+ Add customer / note'}
                 </button>
               </div>
 
-              {showOptionalDetails && (
-                <div style={{ padding: '8px 0 12px 0' }}>
+              {showDetails && (
+                <div style={{ padding: '8px 0' }}>
                   <div className="field">
-                    <span className="field-label">Buyer Name</span>
+                    <span className="field-label">Customer Name</span>
                     <input
                       type="text"
-                      placeholder="e.g. John"
-                      value={logCustomerName}
-                      onChange={(e) => setLogCustomerName(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
-                    />
-                  </div>
-                  <div className="field">
-                    <span className="field-label">Phone</span>
-                    <input
-                      type="tel"
-                      placeholder="e.g. 0712345678"
-                      value={logCustomerPhone}
-                      onChange={(e) => setLogCustomerPhone(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
-                    />
-                  </div>
-                  <div className="field">
-                    <span className="field-label">Destination</span>
-                    <input
-                      type="text"
-                      placeholder="e.g. Nakuru"
-                      value={logDestination}
-                      onChange={(e) => setLogDestination(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                      placeholder="e.g. Kelvin"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px' }}
                     />
                   </div>
                   <div className="field">
                     <span className="field-label">Notes</span>
                     <input
                       type="text"
-                      placeholder="Special packaging..."
+                      placeholder="Notes..."
                       value={logNotes}
                       onChange={(e) => setLogNotes(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
+                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px' }}
                     />
                   </div>
                 </div>
               )}
 
-              <button type="submit" className="submit" disabled={isPending}>
-                Log sale & dispatch jersey
+              <button type="submit" className="submit" style={{ marginTop: '12px' }} disabled={isPending}>
+                Log Handover (Enter)
               </button>
             </form>
           </div>
 
-          {/* Right Column: Available Stock Ledger Accordion */}
+          {/* Right: Recent Dispatches (Fast Swap & Refund Search) */}
           <div className="card">
-            <div className="ledger-head">
-              <span className="title">Available stock</span>
-              <div className="cat-select-wrap">
-                <span className="scope">{activeLocation.name}</span>
-                <select
-                  className="cat-select"
-                  value={stockViewCategory}
-                  onChange={(e) => setStockViewCategory(e.target.value)}
-                >
-                  <option value="all">All categories</option>
-                  {availableCategories.map(cat => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="card-head">
+              <span>Recent Dispatches</span>
+              <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                {recentDispatches.length} items
+              </span>
             </div>
 
-            <div className="stock-accordion">
-              {groupedStockUnits.map(grp => {
-                const isExpanded = !!expandedStockUnits[grp.key];
-                const hasLowStock = grp.lowStockCount > 0;
+            <div style={{ padding: '16px' }}>
+              <div className="search-box-wrap">
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Search Order ID (e.g. 04CA7) to Swap or Refund..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
 
-                return (
-                  <div key={grp.key} className={`stock-accordion-item ${isExpanded ? 'expanded' : ''}`}>
-                    <div
-                      className="stock-accordion-header"
-                      onClick={() => toggleStockUnit(grp.key)}
-                    >
-                      <div className="stock-unit-title">
-                        <span>{grp.category}</span>
-                        {grp.color && grp.color !== 'Standard' && (
-                          <span className="stock-unit-color">{grp.color}</span>
-                        )}
-                      </div>
-                      <div className={`stock-unit-meta ${hasLowStock ? 'low-stock' : ''}`}>
-                        <span>
-                          {grp.totalStock} units
-                          {hasLowStock && ` · ${grp.lowStockCount} low`}
+              <div className="sales-list">
+                {recentDispatches.map(ord => {
+                  const skuParts = ord.original_sku.split('|');
+                  const itemLabel = `${skuParts[0]} ${skuParts[1] !== 'Standard' ? skuParts[1] : ''} (${skuParts[2] || 'One Size'})`;
+
+                  return (
+                    <div key={ord.id} className="sale-card">
+                      <div className="sale-card-header">
+                        <span className="sale-ref">{ord.source_prefix}-{ord.order_ref}</span>
+                        <span className={`badge ${ord.status}`}>
+                          {ord.status}
                         </span>
-                        <svg
-                          className={`stock-chevron ${isExpanded ? 'rotated' : ''}`}
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
+                      </div>
+                      <div className="sale-card-body">
+                        <span className="sale-sku">{itemLabel}</span>
+                        <span className="sale-price">{ord.amount_paid.toLocaleString()} KES</span>
+                      </div>
+                      <div className="sale-card-footer">
+                        <span className="sale-time">{ord.customer_name || 'Counter'}</span>
+                        <div className="sale-actions">
+                          {ord.status !== 'refunded' && (
+                            <>
+                              <button
+                                type="button"
+                                className="btn-action-small"
+                                onClick={() => {
+                                  setSwapOrder(ord);
+                                  setSelectedSwapSku(ord.original_sku);
+                                  setSwapNotes('');
+                                  setSwapModalOpen(true);
+                                }}
+                              >
+                                Swap Size
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-action-small refund"
+                                onClick={() => {
+                                  setRefundOrder(ord);
+                                  setRefundAmount((ord.amount_paid || 2500).toString());
+                                  setRefundModalOpen(true);
+                                }}
+                              >
+                                Refund
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {recentDispatches.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--muted)', fontSize: '13px' }}>
+                    No dispatches logged yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 2: STOCK (CLEAN HIERARCHICAL DROPDOWNS: MERCH -> COLOURS -> SIZES) */}
+      {/* ========================================================================= */}
+      {activeTab === 'stock' && (
+        <div className="stock-view-container">
+          {/* Header Bar */}
+          <div className="stock-top-header">
+            <div>
+              <h2 className="stock-title display">Current Stock</h2>
+              <p className="stock-subtitle">
+                Total shop inventory &middot; Click any category or colourway to expand &amp; view sizes
+              </p>
+            </div>
+
+            <div className="stock-top-actions">
+              <div className="stock-search-wrap">
+                <input
+                  type="text"
+                  placeholder="Filter merchandise, colour, size..."
+                  value={stockSearchQuery}
+                  onChange={(e) => setStockSearchQuery(e.target.value)}
+                  className="stock-search-input"
+                />
+                {stockSearchQuery && (
+                  <button
+                    type="button"
+                    className="clear-search-btn"
+                    onClick={() => setStockSearchQuery('')}
+                    title="Clear filter"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                )}
+              </div>
+
+              <div className="stock-btn-group">
+                <button
+                  type="button"
+                  onClick={handleExpandAllStock}
+                  className="stock-tool-btn"
+                  title="Expand all categories and colourways"
+                >
+                  Expand All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCollapseAllStock}
+                  className="stock-tool-btn"
+                  title="Collapse all"
+                >
+                  Collapse All
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Category Filter Bar */}
+          <div className="stock-category-filter-bar">
+            <button
+              type="button"
+              className={`cat-pill ${stockCategoryFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setStockCategoryFilter('all')}
+            >
+              All Merch ({availableCategories.length})
+            </button>
+            {availableCategories.map(cat => {
+              const catGroup = stockHierarchy.find(c => c.category === cat);
+              const count = catGroup ? catGroup.totalRemaining : 0;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  className={`cat-pill ${stockCategoryFilter === cat ? 'active' : ''}`}
+                  onClick={() => setStockCategoryFilter(cat)}
+                >
+                  <span>{cat}</span>
+                  <span className="cat-count">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Hierarchical Accordion List */}
+          <div className="stock-hierarchy-list">
+            {filteredStockHierarchy.map(cat => {
+              const isCatExpanded = stockSearchQuery.trim() ? true : (expandedCats[cat.category] ?? true);
+              const isZero = cat.totalRemaining <= 0;
+              const isLow = cat.totalRemaining > 0 && cat.totalRemaining <= 20;
+
+              return (
+                <div key={cat.category} className={`stock-category-card ${isCatExpanded ? 'is-expanded' : ''}`}>
+                  {/* Category Header (Dropdown Trigger 1) */}
+                  <div
+                    className="stock-category-header"
+                    onClick={() => toggleCategoryExpand(cat.category)}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div className="stock-cat-left">
+                      <div className={`stock-chevron ${isCatExpanded ? 'open' : ''}`}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="6 9 12 15 18 9"></polyline>
                         </svg>
                       </div>
+                      <div>
+                        <div className="stock-cat-title-row">
+                          <span className="stock-cat-title display">{cat.category}</span>
+                          <span className="stock-cat-price mono">{cat.unitPrice.toLocaleString()} KES</span>
+                        </div>
+                        <div className="stock-cat-meta">
+                          <span>{cat.colorways.length} {cat.colorways.length === 1 ? 'colourway' : 'colourways'}</span>
+                          <span>&bull;</span>
+                          <span>{cat.colorways.reduce((sum, cw) => sum + cw.sizes.length, 0)} sizes</span>
+                        </div>
+                      </div>
                     </div>
 
-                    {isExpanded && (
-                      <div className="stock-accordion-body">
-                        <div className="stock-size-grid">
-                          {grp.items.map(item => {
-                            const isZero = item.stock_on_hand <= 0;
-                            const isLow = item.stock_on_hand <= item.low_stock_threshold && !isZero;
+                    <div className="stock-cat-right">
+                      <div className="stock-stat-badge">
+                        <span className="stock-stat-label">INITIAL</span>
+                        <span className="stock-stat-val mono">{cat.totalInitial}</span>
+                      </div>
+                      <div className="stock-stat-badge">
+                        <span className="stock-stat-label">SOLD</span>
+                        <span className="stock-stat-val mono tag-green">{cat.totalSold}</span>
+                      </div>
+                      <div className={`stock-stat-badge on-hand ${isZero ? 'zero' : isLow ? 'low' : ''}`}>
+                        <span className="stock-stat-label">ON HAND</span>
+                        <span className="stock-stat-val mono">{cat.totalRemaining} pcs</span>
+                      </div>
+                    </div>
+                  </div>
 
-                            return (
-                              <div
-                                key={item.sku}
-                                className={`stock-size-pill ${isLow ? 'low' : ''} ${isZero ? 'zero' : ''}`}
-                                onClick={() => {
-                                  if (!isZero) {
-                                    setSelectedCategory(grp.category);
-                                    setSelectedColor(grp.color);
-                                    setSelectedSize(item.size || 'One Size');
-                                  }
-                                }}
-                                title={isZero ? 'Out of stock' : 'Click to select in log form'}
-                              >
-                                <span>{item.size || 'One Size'}</span>
-                                <b>{item.stock_on_hand}</b>
+                  {/* Level 2: Colourways Accordion */}
+                  {isCatExpanded && (
+                    <div className="stock-colorways-container">
+                      {cat.colorways.map(cw => {
+                        const colKey = `${cat.category}|${cw.color}`;
+                        const isColExpanded = stockSearchQuery.trim() ? true : (expandedCols[colKey] ?? true);
+                        const isCwZero = cw.totalRemaining <= 0;
+                        const isCwLow = cw.totalRemaining > 0 && cw.totalRemaining <= 10;
+
+                        return (
+                          <div key={cw.color} className={`stock-colorway-card ${isColExpanded ? 'is-expanded' : ''}`}>
+                            {/* Colourway Header (Dropdown Trigger 2) */}
+                            <div
+                              className="stock-colorway-header"
+                              onClick={() => toggleColorwayExpand(cat.category, cw.color)}
+                              role="button"
+                              tabIndex={0}
+                            >
+                              <div className="stock-col-left">
+                                <div className={`stock-sub-chevron ${isColExpanded ? 'open' : ''}`}>
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                  </svg>
+                                </div>
+                                <div className="stock-col-info">
+                                  <span className="stock-color-name">{cw.color}</span>
+                                  <span className="stock-color-variants-badge">
+                                    {cw.sizes.length} sizes ({cw.sizes.map(s => s.size).join(', ')})
+                                  </span>
+                                </div>
                               </div>
-                            );
-                          })}
+
+                              <div className="stock-col-right">
+                                <span className="stock-pill-sub">
+                                  Initial: <b>{cw.totalInitial}</b>
+                                </span>
+                                <span className="stock-pill-sub green">
+                                  Sold: <b>{cw.totalSold}</b>
+                                </span>
+                                <span className={`stock-pill-main ${isCwZero ? 'zero' : isCwLow ? 'low' : ''}`}>
+                                  <b>{cw.totalRemaining}</b> pcs on hand
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Level 3: Sizes Breakdown (Clean Compact Table) */}
+                            {isColExpanded && (
+                              <div className="stock-sizes-body">
+                                <table className="stock-sizes-compact-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Size</th>
+                                      <th>Status</th>
+                                      <th style={{ textAlign: 'right' }}>Initial</th>
+                                      <th style={{ textAlign: 'right' }}>Sold</th>
+                                      <th style={{ textAlign: 'right' }}>On Hand</th>
+                                      <th style={{ textAlign: 'right' }}>Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {cw.sizes.map(sz => {
+                                      const isSzZero = sz.remaining <= 0;
+                                      const isSzLow = sz.remaining > 0 && sz.remaining <= sz.lowStockThreshold;
+
+                                      return (
+                                        <tr key={sz.sku}>
+                                          <td className="mono" style={{ fontWeight: 700, fontSize: '13px' }}>
+                                            {sz.size}
+                                          </td>
+                                          <td>
+                                            {isSzZero ? (
+                                              <span className="badge refunded" style={{ fontSize: '10px' }}>OUT OF STOCK</span>
+                                            ) : isSzLow ? (
+                                              <span className="badge swapped" style={{ fontSize: '10px' }}>LOW ({sz.remaining})</span>
+                                            ) : (
+                                              <span className="badge dispatched" style={{ fontSize: '10px' }}>IN STOCK</span>
+                                            )}
+                                          </td>
+                                          <td style={{ textAlign: 'right' }} className="mono">
+                                            {sz.initial}
+                                          </td>
+                                          <td style={{ textAlign: 'right' }} className="mono tag-green">
+                                            {sz.sold}
+                                          </td>
+                                          <td style={{ textAlign: 'right' }} className="mono">
+                                            <strong style={{ color: isSzZero ? 'var(--danger)' : isSzLow ? 'var(--amber)' : 'var(--ink)' }}>
+                                              {sz.remaining} pcs
+                                            </strong>
+                                          </td>
+                                          <td style={{ textAlign: 'right' }}>
+                                            <button
+                                              type="button"
+                                              className="size-dispatch-btn"
+                                              onClick={() => handleQuickSelectStockSize(cat.category, cw.color, sz.size)}
+                                              disabled={isSzZero}
+                                            >
+                                              Dispatch
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {filteredStockHierarchy.length === 0 && (
+              <div className="card" style={{ padding: '48px 24px', textAlign: 'center' }}>
+                <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--ink)' }}>
+                  No matching merchandise found
+                </div>
+                <div style={{ color: 'var(--muted)', fontSize: '13px', marginTop: '4px' }}>
+                  Try clearing your search query or filter to view all stock.
+                </div>
+                <button
+                  type="button"
+                  className="submit"
+                  style={{ width: 'auto', margin: '16px auto 0', padding: '8px 20px' }}
+                  onClick={() => {
+                    setStockSearchQuery('');
+                    setStockCategoryFilter('all');
+                  }}
+                >
+                  Reset Stock Filters
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 3: EVENTS & TRANSFERS */}
+      {/* ========================================================================= */}
+      {activeTab === 'events' && (
+        <div className="events-view-wrap">
+          {/* Top 2-Column Split: Create Event + Send Stock with Live Math */}
+          <div className="events-split-grid">
+            {/* Create Event Card */}
+            <div className="card">
+              <div className="card-head">
+                <span>Create Event Station</span>
+                <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>STEP 1</span>
+              </div>
+              <form
+                className="form"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!newEventName.trim()) return;
+                  startTransition(async () => {
+                    try {
+                      const l = await createEventLocationAction(newEventName.trim());
+                      alert(`Created event station: ${l.name}`);
+                      setNewEventName('');
+                      setEventDispatchEventId(l.id);
+                      await loadAllData();
+                    } catch (err) {
+                      alert('Error creating event station');
+                    }
+                  });
+                }}
+              >
+                <div className="field">
+                  <span className="field-label">Event Name</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. Driftwood 7s"
+                    value={newEventName}
+                    onChange={(e) => setNewEventName(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
+                    required
+                  />
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px', lineHeight: 1.4 }}>
+                  Creates a dedicated event tent station where staff/merchants will log live sales.
+                </p>
+                <button type="submit" className="submit" style={{ marginTop: '14px' }} disabled={isPending}>
+                  + Create Event Station
+                </button>
+              </form>
+            </div>
+
+            {/* Outbound Dispatch: Pick from stock with dropdowns & accurate math */}
+            <div className="card">
+              <div className="card-head">
+                <span>Send Stock to Event</span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    className={`btn-action-small ${eventDispatchMode === 'single' ? 'active' : ''}`}
+                    onClick={() => setEventDispatchMode('single')}
+                  >
+                    Single Size
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn-action-small ${eventDispatchMode === 'batch' ? 'active' : ''}`}
+                    onClick={() => setEventDispatchMode('batch')}
+                  >
+                    Multi-Size Grid
+                  </button>
+                </div>
+              </div>
+
+              <form
+                className="form"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!eventDispatchEventId) {
+                    alert("Please select or create an event station first.");
+                    return;
+                  }
+
+                  const itemsToDispatch: { sku: string; quantity: number }[] = [];
+
+                  if (eventDispatchMode === 'single') {
+                    const qty = parseInt(eventDispatchQty, 10) || 0;
+                    if (qty <= 0) {
+                      alert("Please enter a valid quantity greater than 0");
+                      return;
+                    }
+                    const sku = `${eventDispatchCategory}|${eventDispatchColor}|${eventDispatchSize}`;
+                    const avail = getAvailableWarehouseStock(eventDispatchCategory, eventDispatchColor, eventDispatchSize);
+                    if (qty > avail && avail > 0) {
+                      if (!confirm(`Warning: Requested quantity (${qty}) exceeds available stock (${avail}). Proceed with dispatch anyway?`)) {
+                        return;
+                      }
+                    }
+                    itemsToDispatch.push({ sku, quantity: qty });
+                  } else {
+                    for (const row of eventDispatchMultiSizes) {
+                      const q = parseInt(row.quantity, 10) || 0;
+                      if (q > 0) {
+                        const sku = `${eventDispatchCategory}|${eventDispatchColor}|${row.size}`;
+                        itemsToDispatch.push({ sku, quantity: q });
+                      }
+                    }
+                  }
+
+                  if (itemsToDispatch.length === 0) {
+                    alert("Please enter at least 1 unit to dispatch.");
+                    return;
+                  }
+
+                  const totalQty = itemsToDispatch.reduce((sum, i) => sum + i.quantity, 0);
+                  const targetLoc = locations.find(l => l.id === eventDispatchEventId);
+                  const targetName = targetLoc ? targetLoc.name : 'Event Station';
+
+                  startTransition(async () => {
+                    try {
+                      await dispatchBatchToEventAction(eventDispatchEventId, itemsToDispatch, currentStaff.name);
+                      alert(`Successfully dispatched ${totalQty} pcs to ${targetName}! (Logged by ${currentStaff.name})`);
+                      setEventDispatchQty('');
+                      setEventDispatchMultiSizes(prev => prev.map(p => ({ ...p, quantity: '' })));
+                      await loadAllData();
+                    } catch (err) {
+                      alert(`Dispatch failed: ${(err as Error).message}`);
+                    }
+                  });
+                }}
+              >
+                {/* 1. Target Event */}
+                <div className="field">
+                  <span className="field-label">Target Event</span>
+                  <select
+                    className="plain"
+                    value={eventDispatchEventId}
+                    onChange={(e) => setEventDispatchEventId(e.target.value)}
+                  >
+                    {locations.filter(l => l.type === 'event').map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. Merchandise Item & Colourway Dropdowns */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', margin: '12px 0' }}>
+                  <div>
+                    <span className="field-label" style={{ display: 'block', marginBottom: '4px' }}>Merchandise Item</span>
+                    <select
+                      className="plain"
+                      style={{ width: '100%' }}
+                      value={eventDispatchCategory}
+                      onChange={(e) => {
+                        const cat = e.target.value;
+                        setEventDispatchCategory(cat);
+                        const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
+                        if (cols.length > 0) setEventDispatchColor(cols[0]);
+                      }}
+                    >
+                      {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <span className="field-label" style={{ display: 'block', marginBottom: '4px' }}>Colourway</span>
+                    <select
+                      className="plain"
+                      style={{ width: '100%' }}
+                      value={eventDispatchColor}
+                      onChange={(e) => setEventDispatchColor(e.target.value)}
+                    >
+                      {eventDispatchAvailableColors.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Single Size Mode */}
+                {eventDispatchMode === 'single' && (
+                  <>
+                    <div className="field">
+                      <span className="field-label">Size</span>
+                      <select
+                        className="plain"
+                        value={eventDispatchSize}
+                        onChange={(e) => setEventDispatchSize(e.target.value)}
+                      >
+                        {eventDispatchAvailableSizes.map(sz => (
+                          <option key={sz} value={sz}>{sz}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Live Available Stock Math */}
+                    <div className="field">
+                      <span className="field-label">Available in Stock</span>
+                      {(() => {
+                        const avail = getAvailableWarehouseStock(eventDispatchCategory, eventDispatchColor, eventDispatchSize);
+                        const isLow = avail > 0 && avail <= 10;
+                        const isZero = avail <= 0;
+                        return (
+                          <div className={`stock-avail-badge ${isZero ? 'zero' : isLow ? 'low' : ''}`}>
+                            <span className="live-dot" style={{ background: isZero ? 'var(--danger)' : isLow ? 'var(--amber)' : 'var(--success)' }} />
+                            <span>{avail} pcs available in shop</span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    <div className="field">
+                      <div>
+                        <span className="field-label">Quantity to Dispatch</span>
+                        <div className="quick-alloc-chips" style={{ marginTop: '4px' }}>
+                          <button type="button" className="quick-chip-btn" onClick={() => setEventDispatchQty('10')}>+10</button>
+                          <button type="button" className="quick-chip-btn" onClick={() => setEventDispatchQty('25')}>+25</button>
+                          <button type="button" className="quick-chip-btn" onClick={() => setEventDispatchQty('50')}>+50</button>
+                          <button
+                            type="button"
+                            className="quick-chip-btn"
+                            onClick={() => {
+                              const avail = getAvailableWarehouseStock(eventDispatchCategory, eventDispatchColor, eventDispatchSize);
+                              setEventDispatchQty(avail.toString());
+                            }}
+                          >
+                            Max All
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="e.g. 25"
+                        value={eventDispatchQty}
+                        onChange={(e) => setEventDispatchQty(e.target.value)}
+                        style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '100px' }}
+                        required
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Multi-Size Batch Mode */}
+                {eventDispatchMode === 'batch' && (
+                  <div>
+                    <span className="field-label" style={{ display: 'block', margin: '8px 0 4px 0' }}>
+                      Allocate Quantities by Size:
+                    </span>
+                    <div className="multi-alloc-grid">
+                      {eventDispatchAvailableSizes.map(sz => {
+                        const avail = getAvailableWarehouseStock(eventDispatchCategory, eventDispatchColor, sz);
+                        const currentVal = eventDispatchMultiSizes.find(s => s.size === sz)?.quantity || '';
+
+                        return (
+                          <div key={sz} className="multi-alloc-box">
+                            <span className="multi-alloc-size">{sz}</span>
+                            <span className="multi-alloc-avail">{avail} avail</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max={avail}
+                              placeholder="0"
+                              className="multi-alloc-input"
+                              value={currentVal}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEventDispatchMultiSizes(prev => {
+                                  const exists = prev.some(p => p.size === sz);
+                                  if (exists) {
+                                    return prev.map(p => p.size === sz ? { ...p, quantity: val } : p);
+                                  }
+                                  return [...prev, { size: sz, quantity: val }];
+                                });
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <button type="submit" className="submit" style={{ marginTop: '14px' }} disabled={isPending}>
+                  Dispatch Stock to Event Tent
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* Bottom Section: Created Event Stations & Live Merchant Logs */}
+          <div className="card">
+            <div className="card-head">
+              <div>
+                <span style={{ fontSize: '16px', fontWeight: 800 }}>Event Stations & Live Selling Status</span>
+                <p style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500, marginTop: '2px' }}>
+                  Active tents where staff & merchants log customer handovers and sales
+                </p>
+              </div>
+              <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                {eventStationSummaries.length} Stations
+              </span>
+            </div>
+
+            <div style={{ padding: '20px' }} className="event-stations-list">
+              {eventStationSummaries.map(st => {
+                const isExpanded = expandedEventCards[st.event.id] ?? false;
+
+                return (
+                  <div key={st.event.id} className={`event-station-card ${st.isCurrent ? 'is-active-station' : ''}`}>
+                    {/* Station Header */}
+                    <div className="event-station-header">
+                      <div className="event-station-name-row">
+                        <span className="live-dot" style={{ background: st.isCurrent ? 'var(--success)' : 'var(--muted)' }} />
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span className="event-station-title display">{st.event.name}</span>
+                            <span className="brand-badge">
+                              {st.isCurrent ? 'LIVE ACTIVE STATION' : 'EVENT TENT'}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>Assigned Merchants:</span>
+                            {st.assignedStaff.map(s => (
+                              <span key={s.id} className="merchant-lead-pill">
+                                {s.name} ({s.role === 'event_staff' ? 'Merchant' : s.role})
+                              </span>
+                            ))}
+                            {st.assignedStaff.length === 0 && (
+                              <span style={{ fontSize: '11px', color: 'var(--faint)', fontStyle: 'italic' }}>Open Station</span>
+                            )}
+                            <button
+                              type="button"
+                              className="btn-action-small"
+                              style={{ fontSize: '11px', padding: '2px 8px' }}
+                              onClick={async () => {
+                                const staffToAssign = prompt(`Assign staff to ${st.event.name}:\nAvailable: ${staffProfiles.map(p => p.name).join(', ')}\nEnter Staff Name:`, currentStaff.name);
+                                if (staffToAssign) {
+                                  const target = staffProfiles.find(p => p.name.toLowerCase() === staffToAssign.toLowerCase().trim());
+                                  if (target) {
+                                    await assignStaffToLocationAction(target.id, st.event.id);
+                                    alert(`Assigned ${target.name} to ${st.event.name}!`);
+                                    await loadAllData();
+                                  } else {
+                                    alert("Staff member not found.");
+                                  }
+                                }
+                              }}
+                            >
+                              + Assign Merchant
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="event-station-actions">
+                        {st.isCurrent ? (
+                          <div className="btn-switch-station current">
+                            <span>Currently Selling Here</span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-switch-station"
+                            onClick={() => {
+                              setSelectedLocationId(st.event.id);
+                              setActiveTab('dispatch');
+                            }}
+                          >
+                            <span>Switch & Log Sales Here</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-action-small"
+                          onClick={() => setExpandedEventCards(prev => ({ ...prev, [st.event.id]: !prev[st.event.id] }))}
+                        >
+                          {isExpanded ? 'Hide Tent Stock' : 'View Tent Stock'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-action-small"
+                          onClick={() => {
+                            setTentModalEventId(st.event.id);
+                            const rows = st.inventoryBreakdown.map(i => ({
+                              sku: i.sku,
+                              staffCount: i.remaining.toString(),
+                              expectedQty: i.remaining
+                            }));
+                            setTentCountRows(rows);
+                            setTentModalOpen(true);
+                          }}
+                        >
+                          Closeout & Reconcile
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Metrics Grid */}
+                    <div className="event-metrics-grid">
+                      <div className="event-metric-box">
+                        <span className="event-metric-label">STOCK DISPATCHED</span>
+                        <span className="event-metric-value mono">{st.totalDispatched} <small style={{ fontSize: '11px', color: 'var(--muted)' }}>pcs</small></span>
+                      </div>
+                      <div className="event-metric-box">
+                        <span className="event-metric-label">SALES (DISPATCHED)</span>
+                        <span className="event-metric-value mono success">{st.totalSold} <small style={{ fontSize: '11px', color: 'var(--muted)' }}>pcs</small></span>
+                      </div>
+                      <div className="event-metric-box">
+                        <span className="event-metric-label">TENT STOCK ON HAND</span>
+                        <span className="event-metric-value mono accent">{st.totalRemaining} <small style={{ fontSize: '11px', color: 'var(--muted)' }}>pcs</small></span>
+                      </div>
+                      <div className="event-metric-box">
+                        <span className="event-metric-label">TENT REVENUE</span>
+                        <span className="event-metric-value mono">{st.totalRevenue.toLocaleString()} <small style={{ fontSize: '11px', color: 'var(--muted)' }}>KES</small></span>
+                      </div>
+                    </div>
+
+                    {/* Merchant Attribution Audit Breakdown */}
+                    {st.staffAudits.length > 0 && (
+                      <div className="merchant-audit-card">
+                        <div className="merchant-audit-head">
+                          <span>Live Merchant Attribution & Reconciliation Audit</span>
+                          <span className="mono" style={{ fontSize: '11px', color: 'var(--muted)' }}>AUDITED BY PERSON</span>
+                        </div>
+                        <div className="merchant-staff-list">
+                          {st.staffAudits.map(sa => (
+                            <div key={sa.name} className="merchant-staff-item">
+                              <span className="merchant-staff-name">{sa.name}</span>
+                              <span className="merchant-staff-stat">
+                                <b>{sa.sold}</b> orders sold • <b style={{ color: 'var(--success)' }}>{sa.revenue.toLocaleString()} KES</b>
+                                {sa.swaps > 0 ? ` • ${sa.swaps} swaps` : ''}
+                                {sa.refunds > 0 ? ` • ${sa.refunds} refunds` : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Expanded Tent Inventory Breakdown */}
+                    {isExpanded && (
+                      <div className="event-inventory-breakdown-wrap">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>
+                            Live Tent Inventory Breakdown — {st.event.name}
+                          </span>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table className="event-breakdown-table">
+                            <thead>
+                              <tr>
+                                <th>Item</th>
+                                <th>Colour</th>
+                                <th>Size</th>
+                                <th style={{ textAlign: 'right' }}>Dispatched</th>
+                                <th style={{ textAlign: 'right' }}>Sold by Staff</th>
+                                <th style={{ textAlign: 'right' }}>Remaining in Tent</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {st.inventoryBreakdown.map(row => (
+                                <tr key={row.sku}>
+                                  <td style={{ fontWeight: 600 }}>{row.category}</td>
+                                  <td>{row.color}</td>
+                                  <td className="mono" style={{ fontWeight: 700 }}>{row.size}</td>
+                                  <td style={{ textAlign: 'right' }} className="mono">{row.dispatched}</td>
+                                  <td style={{ textAlign: 'right' }} className="mono tag-green">{row.sold}</td>
+                                  <td style={{ textAlign: 'right' }} className="mono">
+                                    <strong>{row.remaining} pcs</strong>
+                                  </td>
+                                </tr>
+                              ))}
+                              {st.inventoryBreakdown.length === 0 && (
+                                <tr>
+                                  <td colSpan={6} style={{ textAlign: 'center', padding: '16px', color: 'var(--muted)' }}>
+                                    No stock has been dispatched to this event tent yet.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
                     )}
@@ -1449,908 +2082,291 @@ export default function Dashboard() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: EVENTS & TRANSFERS (COMPLETE 2-STEP LIFECYCLE) */}
+      {/* TAB 4: ADD STOCK */}
       {/* ========================================================================= */}
-      {activeTab === 'events' && (
-        <div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
-            {/* Create Event Card */}
-            <div className="card">
-              <div className="card-head">Create new event station</div>
-              <form className="form" onSubmit={handleCreateEvent}>
-                <div className="field">
-                  <span className="field-label">Event Name</span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Kabras 7s, Blankets & Wine"
-                    value={newEventName}
-                    onChange={(e) => setNewEventName(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                    required
-                  />
-                </div>
-                <div className="field">
-                  <span className="field-label">Venue / City</span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Kakamega Sports Club"
-                    value={newEventVenue}
-                    onChange={(e) => setNewEventVenue(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                  />
-                </div>
-                <button type="submit" className="submit" disabled={isPending}>
-                  Create event station
-                </button>
-              </form>
-            </div>
-
-            {/* Outbound Stock Transfer to Event */}
-            <div className="card">
-              <div className="card-head">Dispatch stock to event tent</div>
-              <form className="form" onSubmit={handleDispatchStockToEvent}>
-                <div className="field">
-                  <span className="field-label">Destination Event</span>
-                  <select
-                    className="plain"
-                    value={eventDispatchEventId}
-                    onChange={(e) => setEventDispatchEventId(e.target.value)}
-                    required
-                  >
-                    <option value="">Select Event...</option>
-                    {locations.filter(l => l.type === 'event').map(l => (
-                      <option key={l.id} value={l.id}>{l.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <span className="field-label">Available Unit</span>
-                  <select
-                    className="plain"
-                    value={eventDispatchUnitKey}
-                    onChange={(e) => {
-                      const newKey = e.target.value;
-                      setEventDispatchUnitKey(newKey);
-                      const grp = warehouseGroupedUnits.find(g => g.key === newKey);
-                      if (grp && grp.items.length > 0) {
-                        setEventDispatchSize(grp.items[0].size || 'One Size');
-                      }
-                    }}
-                    required
-                  >
-                    <option value="">Choose available merchandise...</option>
-                    {warehouseGroupedUnits.map(g => (
-                      <option key={g.key} value={g.key}>
-                        {g.category} {g.color !== 'Standard' ? g.color : ''} ({g.totalStock} units in WH)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <span className="field-label">Select Size</span>
-                  <select
-                    className="plain"
-                    value={eventDispatchSize}
-                    onChange={(e) => setEventDispatchSize(e.target.value)}
-                    required
-                  >
-                    {availableSizesForDispatchUnit.map(s => (
-                      <option key={s.sku} value={s.size || 'One Size'}>
-                        {s.size || 'One Size'} ({s.stock_on_hand} pcs available)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <span className="field-label">Dispatch Quantity</span>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 20"
-                    value={eventDispatchQty}
-                    onChange={(e) => setEventDispatchQty(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
-                    required
-                  />
-                </div>
-
-                <div className="field">
-                  <span className="field-label">Notes</span>
-                  <input
-                    type="text"
-                    placeholder="e.g. Initial tent batch allocation"
-                    value={eventDispatchNotes}
-                    onChange={(e) => setEventDispatchNotes(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
-                  />
-                </div>
-
-                <button type="submit" className="submit" disabled={isPending}>
-                  Dispatch stock to tent
-                </button>
-              </form>
-            </div>
-          </div>
-
-          {/* Active Events & 2-Step Handover Overview */}
-          <div className="card" style={{ marginBottom: '24px' }}>
-            <div className="card-head">
-              <span>Active events & 2-step stock return verification</span>
-            </div>
-            <div style={{ padding: '20px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
-                {locations.filter(l => l.type === 'event').map(loc => {
-                  const eventTrans = eventTransfers.filter(t => t.event_id === loc.id);
-                  const totalAllocated = eventTrans.reduce((sum, t) => sum + t.allocated_qty, 0);
-                  const eventStock = stockOnHand.filter(s => s.location_id === loc.id);
-                  const totalCurrentStock = eventStock.reduce((sum, s) => sum + s.stock_on_hand, 0);
-
-                  const isReturnCounted = eventTrans.some(t => t.status === 'return_counted_by_staff');
-                  const isVerified = eventTrans.length > 0 && eventTrans.every(t => t.status === 'verified_in_warehouse');
-
-                  return (
-                    <div
-                      key={loc.id}
-                      style={{
-                        border: '1px solid var(--line)',
-                        borderRadius: '10px',
-                        padding: '16px',
-                        background: 'var(--panel)'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '15px' }}>{loc.name}</div>
-                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>
-                            Created: {new Date(loc.created_at).toLocaleDateString()}
-                          </div>
-                        </div>
-                        <span
-                          className="mono"
-                          style={{
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            padding: '3px 8px',
-                            borderRadius: '5px',
-                            background: isVerified ? 'var(--success-bg)' : isReturnCounted ? 'var(--amber-bg)' : 'var(--bg)',
-                            color: isVerified ? 'var(--success)' : isReturnCounted ? 'var(--amber)' : 'var(--ink)'
-                          }}
-                        >
-                          {isVerified ? 'RECONCILED IN WH' : isReturnCounted ? 'IN TRANSIT TO WH' : 'ACTIVE ON GROUND'}
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', padding: '12px 0', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '14px' }}>
-                        <div>
-                          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>OUTBOUND ALLOCATED</div>
-                          <div className="mono" style={{ fontSize: '16px', fontWeight: 600 }}>{totalAllocated || '—'} pcs</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>CURRENT TENT STOCK</div>
-                          <div className="mono" style={{ fontSize: '16px', fontWeight: 600, color: totalCurrentStock > 0 ? 'var(--ink)' : 'var(--muted)' }}>
-                            {totalCurrentStock} pcs
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        {/* Step 1: Tent Worker Closeout Count */}
-                        <button
-                          type="button"
-                          onClick={() => openTentCloseoutModal(loc.id)}
-                          style={{
-                            flex: 1,
-                            padding: '8px',
-                            fontSize: '12px',
-                            fontWeight: 500,
-                            border: '1px solid var(--line)',
-                            background: 'var(--bg)',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            color: 'var(--ink)'
-                          }}
-                        >
-                          1. Tent Closeout Count
-                        </button>
-
-                        {/* Step 2: Warehouse Verification & Intake */}
-                        <button
-                          type="button"
-                          onClick={() => openWhVerifyModal(loc.id)}
-                          style={{
-                            flex: 1,
-                            padding: '8px',
-                            fontSize: '12px',
-                            fontWeight: 500,
-                            border: 'none',
-                            background: isReturnCounted ? 'var(--ink)' : 'var(--line)',
-                            color: isReturnCounted ? '#FFFFFF' : 'var(--muted)',
-                            borderRadius: '6px',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          2. WH Intake Verify
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Event Transfer Audit Ledger */}
-          <div className="card">
-            <div className="card-head">
-              <span>Event transfer manifests & verification records</span>
-            </div>
-            <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Event</th>
-                    <th>SKU</th>
-                    <th className="num-cell">Outbound Sent</th>
-                    <th className="num-cell">Tent Staff Count</th>
-                    <th className="num-cell">WH Confirmed</th>
-                    <th className="num-cell">Variance</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {eventTransfers.map(t => {
-                    const eventName = locations.find(l => l.id === t.event_id)?.name.split(' ')[0] || t.event_id;
-                    const hasVariance = (t.variance ?? 0) !== 0;
-
-                    return (
-                      <tr key={t.id}>
-                        <td style={{ fontWeight: 600 }}>{eventName}</td>
-                        <td className="mono">{t.sku}</td>
-                        <td className="num-cell">{t.allocated_qty}</td>
-                        <td className="num-cell">{t.tent_staff_return_count ?? '—'}</td>
-                        <td className="num-cell">{t.wh_verified_count ?? '—'}</td>
-                        <td className={`num-cell ${hasVariance ? 'tag-negative' : ''}`}>
-                          {t.variance !== null && t.variance !== undefined ? (t.variance > 0 ? `+${t.variance}` : t.variance) : '—'}
-                        </td>
-                        <td>
-                          <span
-                            className="mono"
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 600,
-                              color: t.status === 'verified_in_warehouse' ? 'var(--success)' : t.status === 'return_counted_by_staff' ? 'var(--amber)' : 'var(--muted)'
-                            }}
-                          >
-                            {t.status === 'verified_in_warehouse' ? 'Verified in WH' : t.status === 'return_counted_by_staff' ? 'In Transit' : 'Dispatched'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 3: STOCK & CATALOG */}
-      {/* ========================================================================= */}
-      {activeTab === 'stock' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: '24px' }}>
-          {/* Dynamic Warehouse Stock-In */}
-          <div className="card">
-            <div className="card-head">
-              <span>Warehouse stock-in</span>
-              <div style={{ display: 'flex', gap: '4px', background: 'var(--bg)', padding: '3px', borderRadius: '7px', border: '1px solid var(--line)' }}>
-                <button
-                  type="button"
-                  onClick={() => setStockInMode('single')}
-                  style={{
-                    border: 'none',
-                    padding: '4px 8px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    borderRadius: '5px',
-                    background: stockInMode === 'single' ? 'var(--panel)' : 'transparent',
-                    color: stockInMode === 'single' ? 'var(--ink)' : 'var(--muted)',
-                    boxShadow: stockInMode === 'single' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Single Item
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStockInMode('multi')}
-                  style={{
-                    border: 'none',
-                    padding: '4px 8px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    borderRadius: '5px',
-                    background: stockInMode === 'multi' ? 'var(--panel)' : 'transparent',
-                    color: stockInMode === 'multi' ? 'var(--ink)' : 'var(--muted)',
-                    boxShadow: stockInMode === 'multi' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Apparel Matrix (Multi-Size)
-                </button>
-              </div>
-            </div>
-
-            <form className="form" onSubmit={handleStockInSubmit}>
-              <div className="field">
-                <span className="field-label">Item / Category</span>
-                <input
-                  type="text"
-                  list="category-suggestions"
-                  placeholder="e.g. Bucket Hat, Concert Merch, Hoodie"
-                  value={stockInCategory}
-                  onChange={(e) => setStockInCategory(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                  required
-                />
-                <datalist id="category-suggestions">
-                  <option value="Bucket Hat" />
-                  <option value="Concert Merch" />
-                  <option value="Fan Jersey" />
-                  <option value="Crew Neck" />
-                  <option value="Graphic Hoodie" />
-                  <option value="KRU Replica" />
-                  <option value="Festival Tee" />
-                  <option value="Tote Bag" />
-                  <option value="Snapback Cap" />
-                </datalist>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Colourway</span>
-                <input
-                  type="text"
-                  list="color-suggestions"
-                  placeholder="e.g. Beige, Black, White, Red"
-                  value={stockInColor}
-                  onChange={(e) => setStockInColor(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '200px' }}
-                  required
-                />
-                <datalist id="color-suggestions">
-                  <option value="Black" />
-                  <option value="Beige" />
-                  <option value="White" />
-                  <option value="Red" />
-                  <option value="Navy" />
-                  <option value="Grey" />
-                  <option value="Green" />
-                  <option value="Vintage Wash" />
-                  <option value="Olive" />
-                </datalist>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Retail Price (KES)</span>
-                <input
-                  type="number"
-                  placeholder="e.g. 1500"
-                  value={stockInPrice}
-                  onChange={(e) => setStockInPrice(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '120px' }}
-                  required
-                />
-              </div>
-
-              {stockInMode === 'single' && (
-                <>
-                  <div className="field">
-                    <span className="field-label">Size</span>
-                    <input
-                      type="text"
-                      list="size-suggestions"
-                      placeholder="e.g. One Size, M, L"
-                      value={stockInSingleSize}
-                      onChange={(e) => setStockInSingleSize(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '140px' }}
-                    />
-                    <datalist id="size-suggestions">
-                      <option value="One Size" />
-                      <option value="Standard" />
-                      <option value="XS" />
-                      <option value="S" />
-                      <option value="M" />
-                      <option value="L" />
-                      <option value="XL" />
-                      <option value="2XL" />
-                      <option value="3XL" />
-                    </datalist>
-                  </div>
-
-                  <div className="field">
-                    <span className="field-label">Quantity Received</span>
-                    <input
-                      type="number"
-                      min="1"
-                      placeholder="e.g. 50"
-                      value={stockInSingleQty}
-                      onChange={(e) => setStockInSingleQty(e.target.value)}
-                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', width: '100px' }}
-                      required
-                    />
-                  </div>
-                </>
-              )}
-
-              {stockInMode === 'multi' && (
-                <div className="field block-field">
-                  <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>Quantities by Size</span>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                    {stockInMultiSizes.map((szObj, idx) => (
-                      <div key={szObj.size} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg)', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-                        <span className="mono" style={{ fontSize: '12px', fontWeight: 600 }}>{szObj.size}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          value={szObj.quantity}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setStockInMultiSizes(prev => prev.map((item, i) => i === idx ? { ...item, quantity: val } : item));
-                          }}
-                          style={{ width: '45px', border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="field">
-                <span className="field-label">Supplier / Batch Notes</span>
-                <input
-                  type="text"
-                  placeholder="e.g. Supplier Batch #1, Drop #2"
-                  value={stockInNotes}
-                  onChange={(e) => setStockInNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                />
-              </div>
-
-              <button type="submit" className="submit" disabled={isPending}>
-                Record warehouse stock-in
+      {activeTab === 'add-stock' && (
+        <div className="card" style={{ maxWidth: '580px' }}>
+          <div className="card-head">
+            <span>Add Stock to Warehouse</span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                className={`btn-action-small ${addMode === 'single' ? 'active' : ''}`}
+                onClick={() => setAddMode('single')}
+              >
+                Single Size
               </button>
-            </form>
-          </div>
-
-          {/* Catalog & Baseline Pricing */}
-          <div className="card">
-            <div className="card-head">
-              <span>SKU catalog & baseline pricing</span>
-              <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                Total registered SKUs: <strong>{catalog.length}</strong>
-              </span>
-            </div>
-            <div style={{ padding: '0 0 12px 0', maxHeight: '440px', overflowY: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>SKU Variant</th>
-                    <th>Category</th>
-                    <th>Color / Size</th>
-                    <th style={{ textAlign: 'right' }}>Price (KES)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {catalog.map(c => (
-                    <tr key={c.sku}>
-                      <td className="mono" style={{ fontWeight: 600 }}>{c.sku}</td>
-                      <td>{c.category}</td>
-                      <td>{c.color || 'Standard'} / {c.size || 'One Size'}</td>
-                      <td className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>{c.price.toLocaleString()} KES</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <button
+                type="button"
+                className={`btn-action-small ${addMode === 'multi' ? 'active' : ''}`}
+                onClick={() => setAddMode('multi')}
+              >
+                Multi-Size (XS-5XL)
+              </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 4: CSV IMPORT */}
-      {/* ========================================================================= */}
-      {activeTab === 'importer' && (
-        <div className="card">
-          <div className="card-head">Batch CSV orders ingest</div>
-          <div className="form">
-            <p style={{ fontSize: '13px', color: 'var(--muted)', margin: '0 0 16px 0' }}>
-              Upload CSV exports from TikoHub or Shopify. The system automatically extracts prefixes, truncates IDs to 5 characters, and expands multi-unit orders.
-            </p>
-
-            <div className="field" style={{ display: 'block' }}>
+          <form className="form" onSubmit={handleAddStockSubmit}>
+            <div className="field">
+              <span className="field-label">Item Name</span>
               <input
-                type="file"
-                accept=".csv"
-                onChange={handleCSVFileChange}
-                style={{ fontSize: '13px', width: '100%', cursor: 'pointer' }}
+                type="text"
+                placeholder="e.g. Fan Jersey, Crew Neck, KRU Replica"
+                value={addCategory}
+                onChange={(e) => setAddCategory(e.target.value)}
+                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
+                required
               />
             </div>
 
-            {parseResult && (
-              <div style={{ marginTop: '16px' }}>
-                <div style={{ fontSize: '13px', marginBottom: '12px' }}>
-                  Identified: <strong>{parseResult.totalOrders} orders</strong> ({parseResult.totalUnits} units expanded).
-                </div>
-
-                <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Prefix & Ref</th>
-                        <th>SKU</th>
-                        <th>Amount</th>
-                        <th>Customer</th>
-                        <th>Unit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {parseResult.orders.map((o, idx) => (
-                        <tr key={idx}>
-                          <td className="mono" style={{ fontWeight: 600 }}>{o.source_prefix}-{o.order_ref}</td>
-                          <td>{o.original_sku}</td>
-                          <td className="mono">{o.amount_paid} KES</td>
-                          <td>{o.customer_name || 'N/A'}</td>
-                          <td>{o.unit_index}/{o.total_units}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
+            {/* Quick item suggestions */}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '2px', marginBottom: '8px' }}>
+              {availableCategories.map(cat => (
                 <button
+                  key={cat}
                   type="button"
-                  onClick={handleImportExecute}
-                  className="submit"
-                  disabled={isPending}
+                  className="quick-chip-btn"
+                  style={{ fontSize: '11px', padding: '2px 8px' }}
+                  onClick={() => {
+                    setAddCategory(cat);
+                    const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
+                    if (cols.length > 0) setAddColor(cols[0]);
+                  }}
                 >
-                  Write {parseResult.orders.length} orders to database
+                  {cat}
                 </button>
+              ))}
+            </div>
+
+            <div className="field">
+              <span className="field-label">Colour</span>
+              <input
+                type="text"
+                placeholder="e.g. White, Red, Navy, Black, Green"
+                value={addColor}
+                onChange={(e) => setAddColor(e.target.value)}
+                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
+                required
+              />
+            </div>
+
+            <div className="field">
+              <span className="field-label">Retail Price (KES)</span>
+              <input
+                type="number"
+                placeholder="2500"
+                value={addPrice}
+                onChange={(e) => setAddPrice(e.target.value)}
+                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, width: '120px' }}
+                required
+              />
+            </div>
+
+            {addMode === 'single' ? (
+              <>
+                <div style={{ margin: '12px 0' }}>
+                  <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>
+                    Choose Size (XS to 5XL or One Size):
+                  </span>
+                  <div className="sizes" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'].map(sz => (
+                      <div
+                        key={sz}
+                        className={`size-chip ${addSingleSize === sz ? 'selected' : ''}`}
+                        onClick={() => setAddSingleSize(sz)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {sz}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <span className="field-label">Quantity to Add</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 50"
+                    value={addSingleQty}
+                    onChange={(e) => setAddSingleQty(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
+                    required
+                  />
+                </div>
+              </>
+            ) : (
+              <div style={{ margin: '14px 0' }}>
+                <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>
+                  Enter Quantities for Each Size (XS to 5XL):
+                </span>
+                <div className="multi-alloc-grid">
+                  {addMultiSizes.map(szRow => (
+                    <div key={szRow.size} className="multi-alloc-box">
+                      <span className="multi-alloc-size">{szRow.size}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        className="multi-alloc-input"
+                        value={szRow.quantity}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAddMultiSizes(prev => prev.map(p => p.size === szRow.size ? { ...p, quantity: val } : p));
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
-          </div>
+
+            <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
+              {addMode === 'single' ? `Add ${addSingleSize} Stock to Warehouse` : 'Batch Add All Sizes to Warehouse'}
+            </button>
+          </form>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 5: RECONCILIATION */}
+      {/* TAB 5: SETTINGS & TOOLS */}
       {/* ========================================================================= */}
-      {activeTab === 'reports' && (
-        <div>
-          <div className="card" style={{ marginBottom: '24px' }}>
-            <div className="card-head">Category reconciliation</div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  <th>Ordered</th>
-                  <th>Dispatched</th>
-                  <th>Swaps</th>
-                  <th style={{ textAlign: 'right' }}>Cash delta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reportCategoryBreakdown.map(r => (
-                  <tr key={r.category}>
-                    <td style={{ fontWeight: 500 }}>{r.category}</td>
-                    <td>{r.ordered} pcs</td>
-                    <td style={{ color: 'var(--success)', fontWeight: 600 }}>{r.dispatched} pcs</td>
-                    <td>{r.swaps}</td>
-                    <td className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>+{r.cashDelta.toLocaleString()} KES</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="card" style={{ marginBottom: '24px' }}>
-            <div className="card-head">Ordered vs. Dispatched audit matrix</div>
-            <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Ref</th>
-                    <th>Customer</th>
-                    <th>Ordered SKU</th>
-                    <th>Handed over</th>
-                    <th>Cash delta</th>
-                    <th>Location</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {enrichedOrders.map(o => (
-                    <tr key={o.id}>
-                      <td className="mono" style={{ fontWeight: 600 }}>{o.source_prefix}-{o.order_ref}</td>
-                      <td>{o.customer_name || 'Walk-up'}</td>
-                      <td style={{ fontSize: '12px' }}>{o.original_sku}</td>
-                      <td style={{ fontSize: '12px', fontWeight: 600 }}>{o.fulfillment?.actual_sku || '—'}</td>
-                      <td className="mono">+{o.fulfillment?.cash_collected || 0} KES</td>
-                      <td>{o.fulfillment ? (locations.find(l => l.id === o.fulfillment?.location_id)?.name.split(' ')[0] || o.fulfillment?.location_id) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="card">
-            <div className="card-head">Database management & deployment tools</div>
-            <div className="form">
-              <p style={{ fontSize: '13px', color: 'var(--muted)', margin: '0 0 14px 0' }}>
-                Prepare the database for real-world deployment or restore sample demo scenarios.
-              </p>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={handleClearAllData}
-                  className="submit"
-                  style={{ background: '#DC2626', width: 'auto', padding: '9px 18px' }}
-                >
-                  Clear all data for live practical run
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDbReset}
-                  className="submit"
-                  style={{ background: 'var(--amber)', width: 'auto', padding: '9px 18px' }}
-                >
-                  Restore SportPesa 7s sample data
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 1: TENT STAFF CLOSEOUT COUNT MODAL */}
-      {/* ========================================================================= */}
-      {tentModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-box" style={{ maxWidth: '540px' }}>
-            <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
-              <span>Step 1: Tent Stock Closeout Handover Count</span>
-              <button
-                onClick={() => setTentModalOpen(false)}
-                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px' }}
-              >
-                Cancel
-              </button>
-            </div>
-
+      {activeTab === 'settings' && (
+        <div className="card">
+          <div className="card-head">Settings & Data Management</div>
+          <div className="form">
             <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
-              Count all unsold merchandise remaining in the event tent before boxing and transport to the warehouse.
+              Reset sample scenarios or clear data.
             </p>
-
-            <form onSubmit={handleTentCloseoutSubmit}>
-              <div className="field">
-                <span className="field-label">Tent Staff Name</span>
-                <input
-                  type="text"
-                  placeholder="e.g. Kelvin (Tent Manager)"
-                  value={tentCountStaffName}
-                  onChange={(e) => setTentCountStaffName(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
-                  required
-                />
-              </div>
-
-              <div style={{ maxHeight: '250px', overflowY: 'auto', margin: '14px 0', border: '1px solid var(--line)', borderRadius: '8px' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>SKU Variant</th>
-                      <th className="num-cell">Expected Tent Stock</th>
-                      <th className="num-cell">Staff Physical Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tentCountRows.map((r, idx) => (
-                      <tr key={r.sku}>
-                        <td className="mono" style={{ fontWeight: 600 }}>{r.sku}</td>
-                        <td className="num-cell">{r.expectedQty} pcs</td>
-                        <td className="num-cell">
-                          <input
-                            type="number"
-                            min="0"
-                            value={r.staffCount}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setTentCountRows(prev => prev.map((item, i) => i === idx ? { ...item, staffCount: val } : item));
-                            }}
-                            style={{ width: '60px', border: '1px solid var(--line)', borderRadius: '5px', padding: '4px', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
-                            required
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Handover Notes</span>
-                <input
-                  type="text"
-                  placeholder="e.g. Boxed into 3 sealed crates"
-                  value={tentCountNotes}
-                  onChange={(e) => setTentCountNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                />
-              </div>
-
-              <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
-                Submit tent count (Handover in transit)
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 2: WAREHOUSE INTAKE VERIFICATION & CONFIRMATION */}
-      {/* ========================================================================= */}
-      {whVerifyModalOpen && (
-        <div className="modal-overlay">
-          <div className="modal-box" style={{ maxWidth: '600px' }}>
-            <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
-              <span>Step 2: Warehouse Intake Verification</span>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <button
-                onClick={() => setWhVerifyModalOpen(false)}
-                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px' }}
+                type="button"
+                onClick={async () => {
+                  if (confirm("Reset database with standard sample data?")) {
+                    await resetDatabaseAction();
+                    await loadAllData();
+                  }
+                }}
+                className="btn-action-small"
+                style={{ padding: '8px 14px' }}
               >
-                Cancel
+                Restore Sample Data
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (confirm("Clear all data for a clean run?")) {
+                    await clearAllDataAction();
+                    await loadAllData();
+                  }
+                }}
+                className="btn-action-small refund"
+                style={{ padding: '8px 14px' }}
+              >
+                Clear All Data
               </button>
             </div>
-
-            <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
-              Verify physical boxes returned from the event. Confirmed stock will be automatically transferred back into the Main Warehouse ledger.
-            </p>
-
-            <form onSubmit={handleWhVerifySubmit}>
-              <div className="field">
-                <span className="field-label">Warehouse Rep Name</span>
-                <input
-                  type="text"
-                  placeholder="e.g. Sarah (Warehouse Lead)"
-                  value={whVerifyStaffName}
-                  onChange={(e) => setWhVerifyStaffName(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter' }}
-                  required
-                />
-              </div>
-
-              <div style={{ maxHeight: '250px', overflowY: 'auto', margin: '14px 0', border: '1px solid var(--line)', borderRadius: '8px' }}>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>SKU</th>
-                      <th className="num-cell">Tent Count</th>
-                      <th className="num-cell">WH Intake Count</th>
-                      <th className="num-cell">Variance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {whVerifyRows.map((r, idx) => {
-                      const whNum = parseInt(r.whCount, 10) || 0;
-                      const diff = whNum - r.staffCount;
-
-                      return (
-                        <tr key={r.sku}>
-                          <td className="mono" style={{ fontWeight: 600 }}>{r.sku}</td>
-                          <td className="num-cell">{r.staffCount} pcs</td>
-                          <td className="num-cell">
-                            <input
-                              type="number"
-                              min="0"
-                              value={r.whCount}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setWhVerifyRows(prev => prev.map((item, i) => i === idx ? { ...item, whCount: val } : item));
-                              }}
-                              style={{ width: '60px', border: '1px solid var(--line)', borderRadius: '5px', padding: '4px', textAlign: 'right', fontFamily: 'IBM Plex Mono', fontSize: '13px' }}
-                              required
-                            />
-                          </td>
-                          <td className={`num-cell ${diff !== 0 ? 'tag-negative' : 'tag-green'}`}>
-                            {diff !== 0 ? (diff > 0 ? `+${diff}` : diff) : '0 (OK)'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="field">
-                <span className="field-label">Intake Confirmation Notes</span>
-                <input
-                  type="text"
-                  placeholder="e.g. All 3 boxes verified & shelved"
-                  value={whVerifyNotes}
-                  onChange={(e) => setWhVerifyNotes(e.target.value)}
-                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontFamily: 'Inter', width: '220px' }}
-                />
-              </div>
-
-              <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
-                Confirm & add stock to main warehouse
-              </button>
-            </form>
           </div>
         </div>
       )}
 
-      {/* Swap Modal */}
+      {/* ========================================================================= */}
+      {/* SWAP MODAL */}
+      {/* ========================================================================= */}
       {swapModalOpen && swapOrder && (
         <div className="modal-overlay">
           <div className="modal-box">
             <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
-              <span>Swap / upgrade SKU</span>
+              <span>Swap Item</span>
               <button
                 onClick={() => setSwapModalOpen(false)}
-                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px' }}
+                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px', fontWeight: 600 }}
               >
-                Cancel
+                Close
               </button>
             </div>
 
-            <div className="field">
-              <span className="field-label">Order Ref</span>
-              <span className="mono" style={{ fontWeight: 600 }}>{swapOrder.source_prefix}-{swapOrder.order_ref}</span>
-            </div>
+            <form onSubmit={handleSwapConfirm}>
+              <div className="field">
+                <span className="field-label">Order</span>
+                <span className="mono" style={{ fontWeight: 700 }}>{swapOrder.source_prefix}-{swapOrder.order_ref}</span>
+              </div>
+              <div className="field">
+                <span className="field-label">Current</span>
+                <span style={{ fontSize: '13px', color: 'var(--muted)' }}>{swapOrder.original_sku}</span>
+              </div>
+              <div className="field">
+                <span className="field-label">New Item</span>
+                <select
+                  className="plain"
+                  value={selectedSwapSku}
+                  onChange={(e) => setSelectedSwapSku(e.target.value)}
+                  required
+                >
+                  {catalog.map(c => (
+                    <option key={c.sku} value={c.sku}>{c.sku}</option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="field">
-              <span className="field-label">Replacement SKU</span>
-              <select
-                className="plain"
-                value={selectedSwapSku}
-                onChange={(e) => setSelectedSwapSku(e.target.value)}
+              <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
+                Confirm Swap
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* REFUND MODAL */}
+      {/* ========================================================================= */}
+      {refundModalOpen && refundOrder && (
+        <div className="modal-overlay">
+          <div className="modal-box">
+            <div className="card-head" style={{ padding: 0, marginBottom: '16px' }}>
+              <span>Process Refund</span>
+              <button
+                onClick={() => setRefundModalOpen(false)}
+                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px', fontWeight: 600 }}
               >
-                {catalog.map(c => (
-                  <option key={c.sku} value={c.sku}>{c.sku} ({c.price} KES)</option>
-                ))}
-              </select>
+                Close
+              </button>
             </div>
 
-            <div className="field">
-              <span className="field-label">Price delta</span>
-              <span className="mono" style={{ fontWeight: 600 }}>+{computedSwapDelta} KES</span>
-            </div>
+            <form onSubmit={handleRefundConfirm}>
+              <div className="field">
+                <span className="field-label">Order</span>
+                <span className="mono" style={{ fontWeight: 700 }}>{refundOrder.source_prefix}-{refundOrder.order_ref}</span>
+              </div>
+              <div className="field">
+                <span className="field-label">Item</span>
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>{refundOrder.original_sku}</span>
+              </div>
+              <div className="field">
+                <span className="field-label">Refund (KES)</span>
+                <input
+                  type="number"
+                  value={refundAmount}
+                  onChange={(e) => setRefundAmount(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px' }}
+                  required
+                />
+              </div>
 
-            <div className="field">
-              <span className="field-label">Cash collected</span>
-              <input
-                type="number"
-                placeholder={computedSwapDelta.toString()}
-                value={swapCashOverride}
-                onChange={(e) => setSwapCashOverride(e.target.value)}
-                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px' }}
-              />
-            </div>
-
-            <button type="button" onClick={handleSwapSubmit} className="submit" style={{ marginTop: '16px' }}>
-              Confirm swap & dispatch
-            </button>
+              <button
+                type="submit"
+                className="submit"
+                style={{ marginTop: '16px', background: 'var(--danger)' }}
+                disabled={isPending}
+              >
+                Confirm Refund (+1 to stock)
+              </button>
+            </form>
           </div>
         </div>
       )}
 
       <div className="footer-credit">
-        Fulfilled by Griphine &middot; Event Inventory & Dispatch System
+        Fulfilled by Griphine &middot; Tent Fulfillment System
       </div>
     </div>
   );

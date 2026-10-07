@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { RawParsedOrder } from './csvParser';
 
 // ==============================================================================
@@ -38,7 +38,7 @@ export interface Order {
   customer_name?: string | null;
   customer_phone?: string | null;
   channel: 'Online' | 'Event' | 'Card' | 'Manual';
-  status: 'pending' | 'fulfilled' | 'cancelled';
+  status: 'pending' | 'fulfilled' | 'swapped' | 'refunded' | 'cancelled';
   created_at: string;
 }
 
@@ -61,7 +61,7 @@ export interface Fulfillment {
 export interface LedgerRow {
   id: string;
   timestamp: string;
-  type: 'StockIn' | 'Transfer' | 'Dispatch' | 'Swap' | 'Correction';
+  type: 'StockIn' | 'Transfer' | 'Dispatch' | 'Swap' | 'Refund' | 'Correction';
   sku: string;
   quantity_delta: number;
   location_id: string;
@@ -112,7 +112,7 @@ export interface EventStockTransfer {
 // Initial Standard Mock State for Fallback / Seeding
 const INITIAL_LOCATIONS: Location[] = [
   { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() },
-  { id: 'evt-sp7s', name: 'SportPesa 7s (RFUEA Ground)', type: 'event', status: 'active', created_at: new Date().toISOString() },
+  { id: 'evt-sp7s', name: 'SportPesa 7s Tent', type: 'event', status: 'active', created_at: new Date().toISOString() },
   { id: 'evt-driftwood', name: 'Driftwood 7s (Mombasa MSC)', type: 'event', status: 'active', created_at: new Date().toISOString() }
 ];
 
@@ -123,7 +123,15 @@ const INITIAL_PREFIXES: OrderPrefix[] = [
   { prefix: 'MANUAL', 'label': 'Tent Walk-Up Direct Entry', active: true, created_at: new Date().toISOString() }
 ];
 
+const INITIAL_STAFF: StaffProfile[] = [
+  { id: 'st-jane', name: 'Jane Wambui', role: 'event_staff', assigned_location_ids: ['evt-driftwood', 'evt-sp7s'] },
+  { id: 'st-kelvin', name: 'Kelvin Ochieng', role: 'event_staff', assigned_location_ids: ['evt-sp7s'] },
+  { id: 'st-sarah', name: 'Sarah (Warehouse Lead)', role: 'warehouse', assigned_location_ids: ['wh-main'] },
+  { id: 'st-winston', name: 'Winston (Admin)', role: 'admin', assigned_location_ids: ['wh-main', 'evt-sp7s', 'evt-driftwood'] }
+];
+
 const INITIAL_CATALOG: CatalogItem[] = [
+  // Fan Jersey - White (XS to 5XL)
   { sku: 'Fan Jersey|White|XS', category: 'Fan Jersey', color: 'White', size: 'XS', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|White|S', category: 'Fan Jersey', color: 'White', size: 'S', price: 2500, low_stock_threshold: 10 },
   { sku: 'Fan Jersey|White|M', category: 'Fan Jersey', color: 'White', size: 'M', price: 2500, low_stock_threshold: 15 },
@@ -133,6 +141,8 @@ const INITIAL_CATALOG: CatalogItem[] = [
   { sku: 'Fan Jersey|White|3XL', category: 'Fan Jersey', color: 'White', size: '3XL', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|White|4XL', category: 'Fan Jersey', color: 'White', size: '4XL', price: 2500, low_stock_threshold: 3 },
   { sku: 'Fan Jersey|White|5XL', category: 'Fan Jersey', color: 'White', size: '5XL', price: 2500, low_stock_threshold: 2 },
+
+  // Fan Jersey - Red (XS to 5XL)
   { sku: 'Fan Jersey|Red|XS', category: 'Fan Jersey', color: 'Red', size: 'XS', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|Red|S', category: 'Fan Jersey', color: 'Red', size: 'S', price: 2500, low_stock_threshold: 10 },
   { sku: 'Fan Jersey|Red|M', category: 'Fan Jersey', color: 'Red', size: 'M', price: 2500, low_stock_threshold: 15 },
@@ -142,14 +152,54 @@ const INITIAL_CATALOG: CatalogItem[] = [
   { sku: 'Fan Jersey|Red|3XL', category: 'Fan Jersey', color: 'Red', size: '3XL', price: 2500, low_stock_threshold: 5 },
   { sku: 'Fan Jersey|Red|4XL', category: 'Fan Jersey', color: 'Red', size: '4XL', price: 2500, low_stock_threshold: 2 },
   { sku: 'Fan Jersey|Red|5XL', category: 'Fan Jersey', color: 'Red', size: '5XL', price: 2500, low_stock_threshold: 2 },
+
+  // Crew Neck - Navy (XS to 5XL)
+  { sku: 'Crew Neck|Navy|XS', category: 'Crew Neck', color: 'Navy', size: 'XS', price: 2250, low_stock_threshold: 5 },
   { sku: 'Crew Neck|Navy|S', category: 'Crew Neck', color: 'Navy', size: 'S', price: 2250, low_stock_threshold: 8 },
   { sku: 'Crew Neck|Navy|M', category: 'Crew Neck', color: 'Navy', size: 'M', price: 2250, low_stock_threshold: 10 },
   { sku: 'Crew Neck|Navy|L', category: 'Crew Neck', color: 'Navy', size: 'L', price: 2250, low_stock_threshold: 10 },
   { sku: 'Crew Neck|Navy|XL', category: 'Crew Neck', color: 'Navy', size: 'XL', price: 2250, low_stock_threshold: 8 },
+  { sku: 'Crew Neck|Navy|2XL', category: 'Crew Neck', color: 'Navy', size: '2XL', price: 2250, low_stock_threshold: 5 },
+  { sku: 'Crew Neck|Navy|3XL', category: 'Crew Neck', color: 'Navy', size: '3XL', price: 2250, low_stock_threshold: 4 },
+  { sku: 'Crew Neck|Navy|4XL', category: 'Crew Neck', color: 'Navy', size: '4XL', price: 2250, low_stock_threshold: 2 },
+  { sku: 'Crew Neck|Navy|5XL', category: 'Crew Neck', color: 'Navy', size: '5XL', price: 2250, low_stock_threshold: 2 },
+
+  // Crew Neck - Grey (XS to 5XL)
+  { sku: 'Crew Neck|Grey|XS', category: 'Crew Neck', color: 'Grey', size: 'XS', price: 2250, low_stock_threshold: 5 },
+  { sku: 'Crew Neck|Grey|S', category: 'Crew Neck', color: 'Grey', size: 'S', price: 2250, low_stock_threshold: 8 },
+  { sku: 'Crew Neck|Grey|M', category: 'Crew Neck', color: 'Grey', size: 'M', price: 2250, low_stock_threshold: 10 },
+  { sku: 'Crew Neck|Grey|L', category: 'Crew Neck', color: 'Grey', size: 'L', price: 2250, low_stock_threshold: 10 },
+  { sku: 'Crew Neck|Grey|XL', category: 'Crew Neck', color: 'Grey', size: 'XL', price: 2250, low_stock_threshold: 8 },
+  { sku: 'Crew Neck|Grey|2XL', category: 'Crew Neck', color: 'Grey', size: '2XL', price: 2250, low_stock_threshold: 5 },
+  { sku: 'Crew Neck|Grey|3XL', category: 'Crew Neck', color: 'Grey', size: '3XL', price: 2250, low_stock_threshold: 4 },
+  { sku: 'Crew Neck|Grey|4XL', category: 'Crew Neck', color: 'Grey', size: '4XL', price: 2250, low_stock_threshold: 2 },
+  { sku: 'Crew Neck|Grey|5XL', category: 'Crew Neck', color: 'Grey', size: '5XL', price: 2250, low_stock_threshold: 2 },
+
+  // KRU Replica - Green (XS to 5XL)
+  { sku: 'KRU Replica|Green|XS', category: 'KRU Replica', color: 'Green', size: 'XS', price: 3000, low_stock_threshold: 5 },
   { sku: 'KRU Replica|Green|S', category: 'KRU Replica', color: 'Green', size: 'S', price: 3000, low_stock_threshold: 5 },
   { sku: 'KRU Replica|Green|M', category: 'KRU Replica', color: 'Green', size: 'M', price: 3000, low_stock_threshold: 8 },
   { sku: 'KRU Replica|Green|L', category: 'KRU Replica', color: 'Green', size: 'L', price: 3000, low_stock_threshold: 8 },
-  { sku: 'KRU Replica|Green|XL', category: 'KRU Replica', color: 'Green', size: 'XL', price: 3000, low_stock_threshold: 5 }
+  { sku: 'KRU Replica|Green|XL', category: 'KRU Replica', color: 'Green', size: 'XL', price: 3000, low_stock_threshold: 5 },
+  { sku: 'KRU Replica|Green|2XL', category: 'KRU Replica', color: 'Green', size: '2XL', price: 3000, low_stock_threshold: 5 },
+  { sku: 'KRU Replica|Green|3XL', category: 'KRU Replica', color: 'Green', size: '3XL', price: 3000, low_stock_threshold: 4 },
+  { sku: 'KRU Replica|Green|4XL', category: 'KRU Replica', color: 'Green', size: '4XL', price: 3000, low_stock_threshold: 2 },
+  { sku: 'KRU Replica|Green|5XL', category: 'KRU Replica', color: 'Green', size: '5XL', price: 3000, low_stock_threshold: 2 },
+
+  // Tank Top - White (XS to 5XL)
+  { sku: 'Tank Top|White|XS', category: 'Tank Top', color: 'White', size: 'XS', price: 1500, low_stock_threshold: 5 },
+  { sku: 'Tank Top|White|S', category: 'Tank Top', color: 'White', size: 'S', price: 1500, low_stock_threshold: 8 },
+  { sku: 'Tank Top|White|M', category: 'Tank Top', color: 'White', size: 'M', price: 1500, low_stock_threshold: 10 },
+  { sku: 'Tank Top|White|L', category: 'Tank Top', color: 'White', size: 'L', price: 1500, low_stock_threshold: 10 },
+  { sku: 'Tank Top|White|XL', category: 'Tank Top', color: 'White', size: 'XL', price: 1500, low_stock_threshold: 8 },
+  { sku: 'Tank Top|White|2XL', category: 'Tank Top', color: 'White', size: '2XL', price: 1500, low_stock_threshold: 5 },
+  { sku: 'Tank Top|White|3XL', category: 'Tank Top', color: 'White', size: '3XL', price: 1500, low_stock_threshold: 4 },
+  { sku: 'Tank Top|White|4XL', category: 'Tank Top', color: 'White', size: '4XL', price: 1500, low_stock_threshold: 2 },
+  { sku: 'Tank Top|White|5XL', category: 'Tank Top', color: 'White', size: '5XL', price: 1500, low_stock_threshold: 2 },
+
+  // Accessories (One Size)
+  { sku: 'Bucket Hat|Black|One Size', category: 'Bucket Hat', color: 'Black', size: 'One Size', price: 1200, low_stock_threshold: 10 },
+  { sku: 'Bucket Hat|Beige|One Size', category: 'Bucket Hat', color: 'Beige', size: 'One Size', price: 1200, low_stock_threshold: 10 }
 ];
 
 const INITIAL_LEDGER: LedgerRow[] = [
@@ -187,9 +237,25 @@ const INITIAL_LEDGER: LedgerRow[] = [
   { id: 'led-sp-d14', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|Red|3XL', quantity_delta: -12, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 30000, notes: 'Event Dispatch' },
   { id: 'led-sp-d15', timestamp: new Date(Date.now() - 86400000).toISOString(), type: 'Dispatch', sku: 'Fan Jersey|White|4XL', quantity_delta: -4, location_id: 'evt-sp7s', staff_id: 'Staff', amount: 10000, notes: 'Event Dispatch' },
 
-  // Warehouse standard stock
-  { id: 'led-wh-01', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|L', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse stock' },
-  { id: 'led-wh-02', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|L', quantity_delta: 40, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse stock' }
+  // Warehouse standard stock (ready for event outbound dispatch)
+  { id: 'led-wh-01', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|XS', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-02', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|S', quantity_delta: 80, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-03', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|M', quantity_delta: 120, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-04', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|L', quantity_delta: 150, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-05', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|XL', quantity_delta: 150, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-06', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|White|2XL', quantity_delta: 60, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-07', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|S', quantity_delta: 60, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-08', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|M', quantity_delta: 90, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-09', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|L', quantity_delta: 110, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-10', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Fan Jersey|Red|XL', quantity_delta: 80, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-11', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|S', quantity_delta: 40, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-12', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|M', quantity_delta: 60, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-13', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|L', quantity_delta: 80, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-14', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'Crew Neck|Navy|XL', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-15', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|S', quantity_delta: 30, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-16', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|M', quantity_delta: 50, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-17', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|L', quantity_delta: 60, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' },
+  { id: 'led-wh-18', timestamp: new Date(Date.now() - 86400000 * 3).toISOString(), type: 'StockIn', sku: 'KRU Replica|Green|XL', quantity_delta: 40, location_id: 'wh-main', staff_id: 'Sarah (Warehouse)', amount: 0, notes: 'Warehouse Central Intake' }
 ];
 
 const INITIAL_ORDERS: Order[] = [
@@ -235,9 +301,25 @@ let memoryFulfillments: Fulfillment[] = [
 ];
 let memoryLedger = [...INITIAL_LEDGER];
 let memoryEventTransfers = [...INITIAL_EVENT_TRANSFERS];
+let memoryStaff = [...INITIAL_STAFF];
 
 // Helper to ensure SKU exists in catalog
 async function ensureSkuExists(sku: string, price: number = 0) {
+  if (!isSupabaseConfigured) {
+    if (!memoryCatalog.some(c => c.sku === sku)) {
+      const parts = sku.split('|');
+      memoryCatalog.push({
+        sku,
+        category: parts[0] || 'Unknown',
+        color: parts[1] || null,
+        size: parts[2] || null,
+        price,
+        low_stock_threshold: 10
+      });
+    }
+    return;
+  }
+
   try {
     const { data } = await supabase.from('catalog').select('sku').eq('sku', sku).maybeSingle();
     if (!data) {
@@ -274,6 +356,8 @@ async function ensureSkuExists(sku: string, price: number = 0) {
 // ==============================================================================
 
 export async function getOrderPrefixes(): Promise<OrderPrefix[]> {
+  if (!isSupabaseConfigured) return memoryPrefixes;
+
   try {
     const { data, error } = await supabase.from('order_prefixes').select('*').order('prefix', { ascending: true });
     if (!error && data && data.length > 0) {
@@ -286,10 +370,12 @@ export async function getOrderPrefixes(): Promise<OrderPrefix[]> {
 }
 
 export async function updateOrderPrefixLabel(prefix: string, label: string): Promise<void> {
-  try {
-    await supabase.from('order_prefixes').update({ label }).eq('prefix', prefix);
-  } catch (e) {
-    console.warn("Supabase prefix update failed, updating memory store:", e);
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('order_prefixes').update({ label }).eq('prefix', prefix);
+    } catch (e) {
+      console.warn("Supabase prefix update failed, updating memory store:", e);
+    }
   }
   const item = memoryPrefixes.find(p => p.prefix === prefix);
   if (item) item.label = label;
@@ -300,6 +386,8 @@ export async function updateOrderPrefixLabel(prefix: string, label: string): Pro
 // ==============================================================================
 
 export async function getLocations(): Promise<Location[]> {
+  if (!isSupabaseConfigured) return memoryLocations;
+
   try {
     const { data, error } = await supabase.from('locations').select('*').order('created_at', { ascending: true });
     if (!error && data && data.length > 0) {
@@ -324,14 +412,16 @@ export async function createEventLocation(name: string, venue?: string): Promise
     created_at: new Date().toISOString()
   };
 
-  try {
-    const { data, error } = await supabase.from('locations').insert(newLoc).select().single();
-    if (!error && data) {
-      memoryLocations.push(data);
-      return data;
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('locations').insert(newLoc).select().single();
+      if (!error && data) {
+        memoryLocations.push(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Supabase location insert failed, writing to memory store:", e);
     }
-  } catch (e) {
-    console.warn("Supabase location insert failed, writing to memory store:", e);
   }
 
   memoryLocations.push(newLoc);
@@ -339,10 +429,76 @@ export async function createEventLocation(name: string, venue?: string): Promise
 }
 
 // ==============================================================================
+// Staff / Merchant Profiles API
+// ==============================================================================
+
+export async function getStaffProfiles(): Promise<StaffProfile[]> {
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('staff_profiles').select('*').order('name', { ascending: true });
+      if (!error && data && data.length > 0) return data;
+    } catch {
+      // fallback
+    }
+  }
+  return memoryStaff;
+}
+
+export async function createStaffProfile(params: {
+  name: string;
+  role: 'admin' | 'warehouse' | 'event_staff';
+  assigned_location_ids?: string[];
+}): Promise<StaffProfile> {
+  const cleanName = params.name.trim();
+  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const id = `st-${slug || Date.now().toString()}`;
+
+  const newStaff: StaffProfile = {
+    id,
+    name: cleanName,
+    role: params.role,
+    assigned_location_ids: params.assigned_location_ids || []
+  };
+
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('staff_profiles').insert(newStaff).select().single();
+      if (!error && data) {
+        memoryStaff.push(data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Supabase staff insert failed, using memory store:", e);
+    }
+  }
+
+  memoryStaff.push(newStaff);
+  return newStaff;
+}
+
+export async function assignStaffToLocation(staffId: string, locationId: string): Promise<StaffProfile> {
+  const staff = memoryStaff.find(s => s.id === staffId);
+  if (!staff) throw new Error('Staff member not found');
+  if (!staff.assigned_location_ids.includes(locationId)) {
+    staff.assigned_location_ids.push(locationId);
+  }
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('staff_profiles').update({ assigned_location_ids: staff.assigned_location_ids }).eq('id', staffId);
+    } catch (e) {
+      console.warn("Supabase staff update failed:", e);
+    }
+  }
+  return staff;
+}
+
+// ==============================================================================
 // Catalog API
 // ==============================================================================
 
 export async function getCatalog(): Promise<CatalogItem[]> {
+  if (!isSupabaseConfigured) return memoryCatalog;
+
   try {
     const { data, error } = await supabase.from('catalog').select('*').order('category', { ascending: true });
     if (!error && data && data.length > 0) {
@@ -355,17 +511,19 @@ export async function getCatalog(): Promise<CatalogItem[]> {
 }
 
 export async function upsertCatalogItem(item: CatalogItem): Promise<void> {
-  try {
-    await supabase.from('catalog').upsert({
-      sku: item.sku,
-      category: item.category,
-      color: item.color,
-      size: item.size,
-      price: item.price,
-      low_stock_threshold: item.low_stock_threshold
-    });
-  } catch (e) {
-    console.warn("Supabase catalog upsert failed, updating memory store:", e);
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('catalog').upsert({
+        sku: item.sku,
+        category: item.category,
+        color: item.color,
+        size: item.size,
+        price: item.price,
+        low_stock_threshold: item.low_stock_threshold
+      });
+    } catch (e) {
+      console.warn("Supabase catalog upsert failed, updating memory store:", e);
+    }
   }
   const idx = memoryCatalog.findIndex(c => c.sku === item.sku);
   if (idx !== -1) {
@@ -376,10 +534,12 @@ export async function upsertCatalogItem(item: CatalogItem): Promise<void> {
 }
 
 export async function deleteCatalogItem(sku: string): Promise<void> {
-  try {
-    await supabase.from('catalog').delete().eq('sku', sku);
-  } catch (e) {
-    console.warn("Supabase catalog delete failed, updating memory store:", e);
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('catalog').delete().eq('sku', sku);
+    } catch (e) {
+      console.warn("Supabase catalog delete failed, updating memory store:", e);
+    }
   }
   memoryCatalog = memoryCatalog.filter(c => c.sku !== sku);
 }
@@ -430,14 +590,18 @@ export async function getDerivedStockOnHand(locationId?: string): Promise<StockO
 
 export async function getOrders(search?: string): Promise<Order[]> {
   let orders: Order[] = [];
-  try {
-    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-    if (!error && data && data.length > 0) {
-      orders = data;
-    } else {
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+      if (!error && data && data.length > 0) {
+        orders = data;
+      } else {
+        orders = memoryOrders;
+      }
+    } catch {
       orders = memoryOrders;
     }
-  } catch {
+  } else {
     orders = memoryOrders;
   }
 
@@ -460,17 +624,19 @@ export async function getOrders(search?: string): Promise<Order[]> {
 // ==============================================================================
 
 export async function getFulfillments(locationId?: string): Promise<Fulfillment[]> {
-  try {
-    let query = supabase.from('fulfillments').select('*').order('fulfilled_at', { ascending: false });
-    if (locationId) {
-      query = query.eq('location_id', locationId);
+  if (isSupabaseConfigured) {
+    try {
+      let query = supabase.from('fulfillments').select('*').order('fulfilled_at', { ascending: false });
+      if (locationId) {
+        query = query.eq('location_id', locationId);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        return data;
+      }
+    } catch (e) {
+      console.warn("Supabase fetch failed for fulfillments, using memory cache:", e);
     }
-    const { data, error } = await query;
-    if (!error && data) {
-      return data;
-    }
-  } catch (e) {
-    console.warn("Supabase fetch failed for fulfillments, using memory cache:", e);
   }
 
   if (locationId) {
@@ -484,20 +650,22 @@ export async function getFulfillments(locationId?: string): Promise<Fulfillment[
 // ==============================================================================
 
 export async function getLedger(locationId?: string, type?: string): Promise<LedgerRow[]> {
-  try {
-    let query = supabase.from('ledger').select('*').order('timestamp', { ascending: false });
-    if (locationId) {
-      query = query.eq('location_id', locationId);
+  if (isSupabaseConfigured) {
+    try {
+      let query = supabase.from('ledger').select('*').order('timestamp', { ascending: false });
+      if (locationId) {
+        query = query.eq('location_id', locationId);
+      }
+      if (type) {
+        query = query.eq('type', type);
+      }
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data;
+      }
+    } catch (e) {
+      console.warn("Supabase fetch failed for ledger, using memory cache:", e);
     }
-    if (type) {
-      query = query.eq('type', type);
-    }
-    const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      return data;
-    }
-  } catch (e) {
-    console.warn("Supabase fetch failed for ledger, using memory cache:", e);
   }
 
   let result = memoryLedger;
@@ -1053,6 +1221,152 @@ export async function quickWalkUpFulfill(params: {
     order: finalOrder,
     fulfillment,
     ledgerRow
+  };
+}
+
+export async function processQuickSwap(params: {
+  orderId: string;
+  newSku: string;
+  cashDelta?: number;
+  locationId: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<{ success: boolean; oldSku: string; newSku: string; cashDelta: number }> {
+  const { orderId, newSku, cashDelta = 0, locationId, staffId = 'Staff', notes } = params;
+
+  await ensureSkuExists(newSku);
+
+  let order: Order | undefined;
+  try {
+    const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
+    order = data || memoryOrders.find(o => o.id === orderId);
+  } catch {
+    order = memoryOrders.find(o => o.id === orderId);
+  }
+
+  if (!order) {
+    throw new Error('Order not found for swap.');
+  }
+
+  const oldSku = order.original_sku;
+
+  // 1. Return old SKU to stock (+1)
+  const returnPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+    type: 'Swap',
+    sku: oldSku,
+    quantity_delta: 1,
+    location_id: locationId,
+    staff_id: staffId,
+    order_id: order.id,
+    amount: 0,
+    notes: notes ? `Swapped for ${newSku} | ${notes}` : `Returned ${oldSku} in exchange for ${newSku}`
+  };
+
+  // 2. Dispatch new SKU from stock (-1)
+  const dispatchPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+    type: 'Swap',
+    sku: newSku,
+    quantity_delta: -1,
+    location_id: locationId,
+    staff_id: staffId,
+    order_id: order.id,
+    amount: cashDelta,
+    notes: notes ? `Swapped from ${oldSku} | ${notes}` : `Dispensed ${newSku} in exchange for ${oldSku}`
+  };
+
+  try {
+    await supabase.from('ledger').insert([returnPayload, dispatchPayload]);
+    await supabase.from('orders').update({ status: 'swapped', original_sku: newSku }).eq('id', orderId);
+  } catch (e) {
+    console.warn("Supabase swap write failed, updating memory store:", e);
+  }
+
+  const rRow: LedgerRow = {
+    ...returnPayload,
+    id: 'led-sw-in-' + Date.now(),
+    timestamp: new Date().toISOString()
+  };
+  const dRow: LedgerRow = {
+    ...dispatchPayload,
+    id: 'led-sw-out-' + (Date.now() + 1),
+    timestamp: new Date().toISOString()
+  };
+
+  memoryLedger.unshift(rRow, dRow);
+
+  const ordIdx = memoryOrders.findIndex(o => o.id === orderId);
+  if (ordIdx !== -1) {
+    memoryOrders[ordIdx].status = 'swapped';
+    memoryOrders[ordIdx].original_sku = newSku;
+  }
+
+  return {
+    success: true,
+    oldSku,
+    newSku,
+    cashDelta
+  };
+}
+
+export async function processQuickRefund(params: {
+  orderId: string;
+  refundAmount?: number;
+  locationId: string;
+  staffId?: string;
+  notes?: string;
+}): Promise<{ success: boolean; skuReturned: string; refundAmount: number }> {
+  const { orderId, refundAmount, locationId, staffId = 'Staff', notes } = params;
+
+  let order: Order | undefined;
+  try {
+    const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
+    order = data || memoryOrders.find(o => o.id === orderId);
+  } catch {
+    order = memoryOrders.find(o => o.id === orderId);
+  }
+
+  if (!order) {
+    throw new Error('Order not found for refund.');
+  }
+
+  const skuReturned = order.original_sku;
+  const actualRefund = refundAmount !== undefined ? refundAmount : (order.amount_paid || 0);
+
+  const refundLedgerPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+    type: 'Refund',
+    sku: skuReturned,
+    quantity_delta: 1,
+    location_id: locationId,
+    staff_id: staffId,
+    order_id: order.id,
+    amount: -actualRefund,
+    notes: notes ? `Refund: ${notes}` : `Refund processed for order ${order.source_prefix}-${order.order_ref}`
+  };
+
+  try {
+    await supabase.from('ledger').insert(refundLedgerPayload);
+    await supabase.from('orders').update({ status: 'refunded' }).eq('id', orderId);
+  } catch (e) {
+    console.warn("Supabase refund write failed, updating memory store:", e);
+  }
+
+  const refRow: LedgerRow = {
+    ...refundLedgerPayload,
+    id: 'led-ref-' + Date.now(),
+    timestamp: new Date().toISOString()
+  };
+
+  memoryLedger.unshift(refRow);
+
+  const ordIdx = memoryOrders.findIndex(o => o.id === orderId);
+  if (ordIdx !== -1) {
+    memoryOrders[ordIdx].status = 'refunded';
+  }
+
+  return {
+    success: true,
+    skuReturned,
+    refundAmount: actualRefund
   };
 }
 
