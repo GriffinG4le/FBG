@@ -2307,19 +2307,19 @@ export default function App() {
               />
             </div>
 
-            {/* MODE 1: APPAREL MULTI-SIZE MATRIX (DIRECT QUANTITY TYPING) */}
+            {/* MODE 1: APPAREL MULTI-SIZE MATRIX (DIRECT QUANTITY TYPING PER SIZE) */}
             {addStockType === 'apparel' && (
-              <div style={{ margin: '14px 0', padding: '12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div className="size-matrix-container">
+                <div className="size-matrix-header">
                   <div>
                     <span className="field-label" style={{ fontWeight: 700, color: 'var(--ink)' }}>
-                      Enter Quantity for Each Size:
+                      👕 Sized Inventory Matrix (XS &ndash; 5XL)
                     </span>
                     <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '2px 0 0 0' }}>
-                      Type quantities for available sizes &middot; Empty / 0 sizes will not be added
+                      Type quantities directly into each size box &bull; Tab to jump to next size
                     </p>
                   </div>
-                  <div style={{ display: 'flex', gap: '4px' }}>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       className="btn-action-small"
@@ -2338,6 +2338,14 @@ export default function App() {
                     </button>
                     <button
                       type="button"
+                      className="btn-action-small"
+                      style={{ fontSize: '10px', padding: '2px 6px' }}
+                      onClick={() => handleSetAllMultiSizes(25)}
+                    >
+                      +25 All
+                    </button>
+                    <button
+                      type="button"
                       className="btn-action-small refund"
                       style={{ fontSize: '10px', padding: '2px 6px' }}
                       onClick={() => handleSetAllMultiSizes(0)}
@@ -2347,85 +2355,105 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="multi-alloc-grid">
-                  {addMultiSizes.map(szRow => (
-                    <div key={szRow.size} className="multi-alloc-box">
-                      <span className="multi-alloc-size">{szRow.size}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        className="multi-alloc-input mono"
-                        value={szRow.quantity}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setAddMultiSizes(prev => prev.map(p => p.size === szRow.size ? { ...p, quantity: val } : p));
-                        }}
-                      />
-                    </div>
-                  ))}
+                <div className="size-matrix-grid">
+                  {addMultiSizes.map(szRow => {
+                    const hasVal = (parseInt(szRow.quantity, 10) || 0) > 0;
+                    return (
+                      <div key={szRow.size} className={`size-input-card ${hasVal ? 'has-value' : ''}`}>
+                        <span className="size-input-badge">{szRow.size}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          className="size-input-field"
+                          value={szRow.quantity}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setAddMultiSizes(prev => prev.map(p => p.size === szRow.size ? { ...p, quantity: val } : p));
+                          }}
+                        />
+                        <span className="size-input-unit">pcs</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
             {/* MODE 2: ACCESSORY (NON-SIZED / ONE SIZE) */}
             {addStockType === 'accessory' && (
-              <div style={{ margin: '14px 0', padding: '14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div className="size-matrix-container">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                   <span style={{ fontSize: '20px' }}>🧢</span>
                   <div>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>Non-Sized Accessory / Merchandise</span>
                     <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '1px 0 0 0' }}>
-                      Caps, bucket hats, bottles, and gear are automatically recorded as <b>One Size</b>.
+                      Caps, bucket hats, bottles, and bags are recorded as a single <b>One Size</b> unit pool.
                     </p>
                   </div>
                 </div>
 
                 <div className="field" style={{ margin: 0, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
                   <span className="field-label" style={{ fontWeight: 600 }}>Quantity to Add</span>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 50"
-                    value={addSingleQty}
-                    onChange={(e) => setAddSingleQty(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
-                    required
-                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      {[5, 10, 25, 50, 100].map(amt => (
+                        <button
+                          key={amt}
+                          type="button"
+                          className="btn-action-small"
+                          style={{ fontSize: '10px', padding: '2px 6px' }}
+                          onClick={() => setAddSingleQty(amt.toString())}
+                        >
+                          +{amt}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="e.g. 50"
+                      value={addSingleQty}
+                      onChange={(e) => setAddSingleQty(e.target.value)}
+                      style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '100px' }}
+                      required
+                    />
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>pcs</span>
+                  </div>
                 </div>
               </div>
             )}
 
             {/* MODE 3: SINGLE / CUSTOM SIZE QUICK ENTRY */}
             {addStockType === 'single' && (
-              <div style={{ margin: '14px 0', padding: '12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+              <div className="size-matrix-container">
                 <span className="field-label" style={{ display: 'block', marginBottom: '8px', fontWeight: 700 }}>
-                  Choose or Type Size:
+                  ⚡ Custom / Individual Size Entry
                 </span>
-                <div className="sizes" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                  {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'].map(sz => (
-                    <div
-                      key={sz}
-                      className={`size-chip ${addSingleSize === sz ? 'selected' : ''}`}
-                      onClick={() => setAddSingleSize(sz)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      {sz}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="field" style={{ margin: 0, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-                  <span className="field-label" style={{ fontWeight: 600 }}>Quantity to Add</span>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 10"
-                    value={addSingleQty}
-                    onChange={(e) => setAddSingleQty(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
-                    required
-                  />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                  <div>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Size Name / Code</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. M, XL, 6XL, Kids 10, One Size"
+                      value={addSingleSize}
+                      onChange={(e) => setAddSingleSize(e.target.value)}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '13px', fontWeight: 600, outline: 'none' }}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Quantity</span>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="e.g. 20"
+                      value={addSingleQty}
+                      onChange={(e) => setAddSingleQty(e.target.value)}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--panel)', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, outline: 'none' }}
+                      required
+                    />
+                  </div>
                 </div>
               </div>
             )}
