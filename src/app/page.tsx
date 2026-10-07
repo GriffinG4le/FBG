@@ -76,6 +76,7 @@ export default function App() {
   // Stock Filter & Hierarchy State
   const [stockSearchQuery, setStockSearchQuery] = useState<string>('');
   const [stockCategoryFilter, setStockCategoryFilter] = useState<string>('all');
+  const [stockLocationFilter, setStockLocationFilter] = useState<string>('all');
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({
     'Fan Jersey': true,
     'Crew Neck': true,
@@ -90,8 +91,9 @@ export default function App() {
     'KRU Replica|Green': true
   });
 
-  // Dynamic Add Stock Form
-  const [addMode, setAddMode] = useState<'single' | 'multi'>('single');
+  // Dynamic Add Stock Form State
+  const [addStockType, setAddStockType] = useState<'apparel' | 'accessory' | 'single'>('apparel');
+  const [addStockDestination, setAddStockDestination] = useState<string>('wh-main');
   const [addCategory, setAddCategory] = useState<string>('Fan Jersey');
   const [addColor, setAddColor] = useState<string>('White');
   const [addSingleSize, setAddSingleSize] = useState<string>('M');
@@ -447,17 +449,31 @@ export default function App() {
       }
 
       const sku = item.sku;
-      const initial = ledger
-        .filter(l => l.location_id === selectedLocationId && l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
-        .reduce((sum, l) => sum + l.quantity_delta, 0);
+      const initial = stockLocationFilter === 'all'
+        ? ledger
+            .filter(l => l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
+            .reduce((sum, l) => sum + l.quantity_delta, 0)
+        : ledger
+            .filter(l => l.location_id === stockLocationFilter && l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
+            .reduce((sum, l) => sum + l.quantity_delta, 0);
 
-      const sold = Math.abs(
-        ledger
-          .filter(l => l.location_id === selectedLocationId && l.sku === sku && l.type === 'Dispatch')
-          .reduce((sum, l) => sum + l.quantity_delta, 0)
-      );
+      const sold = stockLocationFilter === 'all'
+        ? Math.abs(
+            ledger
+              .filter(l => l.sku === sku && l.type === 'Dispatch')
+              .reduce((sum, l) => sum + l.quantity_delta, 0)
+          )
+        : Math.abs(
+            ledger
+              .filter(l => l.location_id === stockLocationFilter && l.sku === sku && l.type === 'Dispatch')
+              .reduce((sum, l) => sum + l.quantity_delta, 0)
+          );
 
-      const remaining = getStockCount(sku);
+      const remaining = stockLocationFilter === 'all'
+        ? stockOnHand
+            .filter(s => s.sku === sku)
+            .reduce((sum, s) => sum + s.stock_on_hand, 0)
+        : (stockOnHand.find(s => s.location_id === stockLocationFilter && s.sku === sku)?.stock_on_hand || 0);
 
       colMap.get(col)!.push({
         sku,
@@ -562,7 +578,7 @@ export default function App() {
 
     result.sort((a, b) => a.category.localeCompare(b.category));
     return result;
-  }, [catalog, ledger, stockOnHand, selectedLocationId, stockCategoryFilter]);
+  }, [catalog, ledger, stockOnHand, stockLocationFilter, stockCategoryFilter]);
 
   // Filtered Hierarchy based on stock search
   const filteredStockHierarchy = useMemo(() => {
@@ -752,54 +768,113 @@ export default function App() {
     });
   };
 
+  // Helpers for Add Stock Form
+  const handleSelectAddCategory = (catName: string) => {
+    setAddCategory(catName);
+    if (isAccessoryCategory(catName)) {
+      setAddStockType('accessory');
+      setAddSingleSize('One Size');
+    } else {
+      if (addStockType === 'accessory') {
+        setAddStockType('apparel');
+      }
+    }
+    const cols = [...new Set(catalog.filter(c => c.category === catName).map(c => c.color || 'Standard'))];
+    if (cols.length > 0 && cols[0]) {
+      setAddColor(cols[0]);
+    }
+    const item = catalog.find(c => c.category === catName);
+    if (item && item.price > 0) {
+      setAddPrice(item.price.toString());
+    }
+  };
+
+  const handleSetAllMultiSizes = (amount: number) => {
+    setAddMultiSizes(prev => prev.map(s => ({
+      ...s,
+      quantity: amount > 0 ? ((parseInt(s.quantity, 10) || 0) + amount).toString() : ''
+    })));
+  };
+
+  const totalAddUnits = useMemo(() => {
+    if (addStockType === 'apparel') {
+      return addMultiSizes.reduce((sum, s) => sum + (parseInt(s.quantity, 10) || 0), 0);
+    } else {
+      return parseInt(addSingleQty, 10) || 0;
+    }
+  }, [addStockType, addMultiSizes, addSingleQty]);
+
+  const totalAddValue = useMemo(() => {
+    const price = parseFloat(addPrice) || 0;
+    return totalAddUnits * price;
+  }, [totalAddUnits, addPrice]);
+
   // Dynamic Add Stock Submit
   const handleAddStockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!addCategory.trim() || !addColor.trim()) {
-      alert("Please fill in item name and colour.");
+    const cat = addCategory.trim();
+    const col = addColor.trim() || 'Standard';
+    if (!cat) {
+      alert("Please fill in item name.");
       return;
     }
 
-    const price = parseFloat(addPrice) || 2500;
+    const price = parseFloat(addPrice) || 0;
+    const destLoc = locations.find(l => l.id === addStockDestination) || locations[0];
+    const destName = destLoc?.name || 'Warehouse';
 
     startTransition(async () => {
       try {
-        if (addMode === 'single') {
-          const qty = parseInt(addSingleQty, 10) || 0;
-          if (qty <= 0) return alert("Enter a valid quantity (>0).");
-
-          await logDynamicWarehouseStockInAction({
-            category: addCategory.trim(),
-            color: addColor.trim(),
-            size: addSingleSize.trim() || 'One Size',
-            price,
-            quantity: qty,
-            locationId: 'wh-main',
-            staffId: currentStaff.name
-          });
-        } else {
+        if (addStockType === 'apparel') {
           const variants = addMultiSizes
             .map(s => ({ size: s.size, quantity: parseInt(s.quantity, 10) || 0 }))
             .filter(v => v.quantity > 0);
 
-          if (variants.length === 0) return alert("Enter quantity for at least one size.");
+          if (variants.length === 0) {
+            alert("Please enter a quantity for at least one size.");
+            return;
+          }
 
           await logBatchWarehouseStockInAction({
-            category: addCategory.trim(),
-            color: addColor.trim(),
+            category: cat,
+            color: col,
             price,
             variants,
-            locationId: 'wh-main',
-            staffId: currentStaff.name
+            locationId: addStockDestination,
+            staffId: currentStaff.name,
+            notes: `Batch apparel intake for ${cat} (${col}) into ${destName}`
           });
+
+          const totalAdded = variants.reduce((sum, v) => sum + v.quantity, 0);
+          alert(`Success: Added ${totalAdded} units of ${cat} (${col}) across ${variants.length} sizes to ${destName}!`);
+        } else {
+          const size = addStockType === 'accessory' ? 'One Size' : (addSingleSize.trim() || 'One Size');
+          const qty = parseInt(addSingleQty, 10) || 0;
+          if (qty <= 0) {
+            alert("Please enter a valid quantity greater than 0.");
+            return;
+          }
+
+          await logDynamicWarehouseStockInAction({
+            category: cat,
+            color: col,
+            size,
+            price,
+            quantity: qty,
+            locationId: addStockDestination,
+            staffId: currentStaff.name,
+            notes: `Stock intake for ${cat} (${col} / ${size}) into ${destName}`
+          });
+
+          alert(`Success: Added ${qty} units of ${cat} (${col} / ${size}) to ${destName}!`);
         }
 
-        alert("Stock added successfully!");
-        setAddCategory('');
-        setAddColor('');
         setAddSingleQty('');
         setAddMultiSizes(prev => prev.map(s => ({ ...s, quantity: '' })));
         await loadAllData();
+        // Update stock location filter to match where stock was added so user sees it right away
+        setStockLocationFilter(addStockDestination);
+        setActiveTab('stock');
       } catch (err) {
         alert(`Failed to add stock: ${(err as Error).message}`);
       }
@@ -1324,13 +1399,37 @@ export default function App() {
           {/* Header Bar */}
           <div className="stock-top-header">
             <div>
-              <h2 className="stock-title display">Current Stock</h2>
-              <p className="stock-subtitle">
-                Total shop inventory &middot; Click any category or colourway to expand &amp; view sizes
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h2 className="stock-title display" style={{ margin: 0 }}>Current Stock</h2>
+                <span className="badge" style={{ fontSize: '11px', background: 'var(--border)', color: 'var(--ink)' }}>
+                  {stockLocationFilter === 'all' ? '🌐 Company-Wide (All Locations)' : locations.find(l => l.id === stockLocationFilter)?.name || 'Filtered Location'}
+                </span>
+              </div>
+              <p className="stock-subtitle" style={{ marginTop: '4px' }}>
+                {stockLocationFilter === 'all'
+                  ? 'Total company-wide inventory across central warehouse and all event stations.'
+                  : `Showing physical stock on hand at ${locations.find(l => l.id === stockLocationFilter)?.name || 'this location'}.`}
               </p>
             </div>
 
             <div className="stock-top-actions">
+              {/* Location Scope Filter Dropdown */}
+              <div className="stock-loc-picker-wrap">
+                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Location:</span>
+                <select
+                  value={stockLocationFilter}
+                  onChange={(e) => setStockLocationFilter(e.target.value)}
+                  className="stock-loc-select-input"
+                >
+                  <option value="all">🌐 All Locations (Global Total)</option>
+                  {locations.map(loc => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.type === 'warehouse' ? '🏢' : '🎪'} {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="stock-search-wrap">
                 <input
                   type="text"
@@ -2085,63 +2184,109 @@ export default function App() {
       {/* TAB 4: ADD STOCK */}
       {/* ========================================================================= */}
       {activeTab === 'add-stock' && (
-        <div className="card" style={{ maxWidth: '580px' }}>
-          <div className="card-head">
-            <span>Add Stock to Warehouse</span>
-            <div style={{ display: 'flex', gap: '6px' }}>
+        <div className="card" style={{ maxWidth: '640px', margin: '0 auto' }}>
+          <div className="card-head" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: '16px', fontWeight: 700 }}>Add Stock Intake</span>
+                <p style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px', fontWeight: 500 }}>
+                  Intake physical stock for apparel lines or non-sized accessories
+                </p>
+              </div>
+              <span className="live-dot" />
+            </div>
+
+            {/* Mode Switcher */}
+            <div className="add-stock-type-nav" style={{ display: 'flex', gap: '6px', width: '100%', paddingTop: '4px' }}>
               <button
                 type="button"
-                className={`btn-action-small ${addMode === 'single' ? 'active' : ''}`}
-                onClick={() => setAddMode('single')}
+                className={`add-stock-type-btn ${addStockType === 'apparel' ? 'active' : ''}`}
+                onClick={() => setAddStockType('apparel')}
               >
-                Single Size
+                <span>👕</span>
+                <span>Apparel (Size Matrix)</span>
               </button>
               <button
                 type="button"
-                className={`btn-action-small ${addMode === 'multi' ? 'active' : ''}`}
-                onClick={() => setAddMode('multi')}
+                className={`add-stock-type-btn ${addStockType === 'accessory' ? 'active' : ''}`}
+                onClick={() => {
+                  setAddStockType('accessory');
+                  setAddSingleSize('One Size');
+                }}
               >
-                Multi-Size (XS-5XL)
+                <span>🧢</span>
+                <span>Accessory (One Size)</span>
+              </button>
+              <button
+                type="button"
+                className={`add-stock-type-btn ${addStockType === 'single' ? 'active' : ''}`}
+                onClick={() => setAddStockType('single')}
+              >
+                <span>⚡</span>
+                <span>Single / Custom Size</span>
               </button>
             </div>
           </div>
+
           <form className="form" onSubmit={handleAddStockSubmit}>
+            {/* Destination Selector */}
+            <div className="field">
+              <span className="field-label">Stock Destination</span>
+              <select
+                className="plain"
+                value={addStockDestination}
+                onChange={(e) => setAddStockDestination(e.target.value)}
+                style={{ fontWeight: 600, fontSize: '13px' }}
+              >
+                {locations.map(loc => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.type === 'warehouse' ? '🏢' : '🎪'} {loc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Item Name Input & Quick Category Suggestions */}
             <div className="field">
               <span className="field-label">Item Name</span>
               <input
                 type="text"
-                placeholder="e.g. Fan Jersey, Crew Neck, KRU Replica"
+                placeholder="e.g. Fan Jersey, Crew Neck, Bucket Hat, Gale Industries merch"
                 value={addCategory}
-                onChange={(e) => setAddCategory(e.target.value)}
-                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAddCategory(val);
+                  if (isAccessoryCategory(val) && addStockType === 'apparel') {
+                    setAddStockType('accessory');
+                    setAddSingleSize('One Size');
+                  }
+                }}
+                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '14px', fontWeight: 600 }}
                 required
               />
             </div>
 
-            {/* Quick item suggestions */}
+            {/* Quick Suggestions Chips */}
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '2px', marginBottom: '8px' }}>
               {availableCategories.map(cat => (
                 <button
                   key={cat}
                   type="button"
-                  className="quick-chip-btn"
-                  style={{ fontSize: '11px', padding: '2px 8px' }}
-                  onClick={() => {
-                    setAddCategory(cat);
-                    const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
-                    if (cols.length > 0) setAddColor(cols[0]);
-                  }}
+                  className={`quick-chip-btn ${addCategory === cat ? 'active' : ''}`}
+                  style={{ fontSize: '11px', padding: '3px 9px' }}
+                  onClick={() => handleSelectAddCategory(cat)}
                 >
-                  {cat}
+                  {isAccessoryCategory(cat) ? '🧢' : '👕'} {cat}
                 </button>
               ))}
             </div>
 
+            {/* Colour Input */}
             <div className="field">
               <span className="field-label">Colour</span>
               <input
                 type="text"
-                placeholder="e.g. White, Red, Navy, Black, Green"
+                placeholder="e.g. White, Red, Navy, Black, Beige"
                 value={addColor}
                 onChange={(e) => setAddColor(e.target.value)}
                 style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
@@ -2149,6 +2294,7 @@ export default function App() {
               />
             </div>
 
+            {/* Price Input */}
             <div className="field">
               <span className="field-label">Retail Price (KES)</span>
               <input
@@ -2156,49 +2302,51 @@ export default function App() {
                 placeholder="2500"
                 value={addPrice}
                 onChange={(e) => setAddPrice(e.target.value)}
-                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, width: '120px' }}
+                style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, width: '130px' }}
                 required
               />
             </div>
 
-            {addMode === 'single' ? (
-              <>
-                <div style={{ margin: '12px 0' }}>
-                  <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>
-                    Choose Size (XS to 5XL or One Size):
-                  </span>
-                  <div className="sizes" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'].map(sz => (
-                      <div
-                        key={sz}
-                        className={`size-chip ${addSingleSize === sz ? 'selected' : ''}`}
-                        onClick={() => setAddSingleSize(sz)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        {sz}
-                      </div>
-                    ))}
+            {/* MODE 1: APPAREL MULTI-SIZE MATRIX (DIRECT QUANTITY TYPING) */}
+            {addStockType === 'apparel' && (
+              <div style={{ margin: '14px 0', padding: '12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div>
+                    <span className="field-label" style={{ fontWeight: 700, color: 'var(--ink)' }}>
+                      Enter Quantity for Each Size:
+                    </span>
+                    <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '2px 0 0 0' }}>
+                      Type quantities for available sizes &middot; Empty / 0 sizes will not be added
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button
+                      type="button"
+                      className="btn-action-small"
+                      style={{ fontSize: '10px', padding: '2px 6px' }}
+                      onClick={() => handleSetAllMultiSizes(5)}
+                    >
+                      +5 All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-action-small"
+                      style={{ fontSize: '10px', padding: '2px 6px' }}
+                      onClick={() => handleSetAllMultiSizes(10)}
+                    >
+                      +10 All
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-action-small refund"
+                      style={{ fontSize: '10px', padding: '2px 6px' }}
+                      onClick={() => handleSetAllMultiSizes(0)}
+                    >
+                      Clear
+                    </button>
                   </div>
                 </div>
 
-                <div className="field">
-                  <span className="field-label">Quantity to Add</span>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 50"
-                    value={addSingleQty}
-                    onChange={(e) => setAddSingleQty(e.target.value)}
-                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
-                    required
-                  />
-                </div>
-              </>
-            ) : (
-              <div style={{ margin: '14px 0' }}>
-                <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>
-                  Enter Quantities for Each Size (XS to 5XL):
-                </span>
                 <div className="multi-alloc-grid">
                   {addMultiSizes.map(szRow => (
                     <div key={szRow.size} className="multi-alloc-box">
@@ -2207,7 +2355,7 @@ export default function App() {
                         type="number"
                         min="0"
                         placeholder="0"
-                        className="multi-alloc-input"
+                        className="multi-alloc-input mono"
                         value={szRow.quantity}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -2220,8 +2368,103 @@ export default function App() {
               </div>
             )}
 
-            <button type="submit" className="submit" style={{ marginTop: '16px' }} disabled={isPending}>
-              {addMode === 'single' ? `Add ${addSingleSize} Stock to Warehouse` : 'Batch Add All Sizes to Warehouse'}
+            {/* MODE 2: ACCESSORY (NON-SIZED / ONE SIZE) */}
+            {addStockType === 'accessory' && (
+              <div style={{ margin: '14px 0', padding: '14px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '20px' }}>🧢</span>
+                  <div>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>Non-Sized Accessory / Merchandise</span>
+                    <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '1px 0 0 0' }}>
+                      Caps, bucket hats, bottles, and gear are automatically recorded as <b>One Size</b>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="field" style={{ margin: 0, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                  <span className="field-label" style={{ fontWeight: 600 }}>Quantity to Add</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 50"
+                    value={addSingleQty}
+                    onChange={(e) => setAddSingleQty(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* MODE 3: SINGLE / CUSTOM SIZE QUICK ENTRY */}
+            {addStockType === 'single' && (
+              <div style={{ margin: '14px 0', padding: '12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
+                <span className="field-label" style={{ display: 'block', marginBottom: '8px', fontWeight: 700 }}>
+                  Choose or Type Size:
+                </span>
+                <div className="sizes" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                  {['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'].map(sz => (
+                    <div
+                      key={sz}
+                      className={`size-chip ${addSingleSize === sz ? 'selected' : ''}`}
+                      onClick={() => setAddSingleSize(sz)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {sz}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="field" style={{ margin: 0, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                  <span className="field-label" style={{ fontWeight: 600 }}>Quantity to Add</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 10"
+                    value={addSingleQty}
+                    onChange={(e) => setAddSingleQty(e.target.value)}
+                    style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '120px' }}
+                    required
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Live Inventory Value Summary Banner */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '10px 14px',
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)',
+              margin: '12px 0 16px 0',
+              fontSize: '12px'
+            }}>
+              <div>
+                <span style={{ color: 'var(--muted)' }}>Total Units: </span>
+                <strong className="mono" style={{ fontSize: '14px', color: totalAddUnits > 0 ? 'var(--ink)' : 'var(--muted)' }}>
+                  {totalAddUnits.toLocaleString()} pcs
+                </strong>
+              </div>
+              <div>
+                <span style={{ color: 'var(--muted)' }}>Estimated Value: </span>
+                <strong className="mono" style={{ fontSize: '14px', color: totalAddValue > 0 ? 'var(--success)' : 'var(--muted)' }}>
+                  {totalAddValue.toLocaleString()} KES
+                </strong>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="submit"
+              style={{ padding: '12px', fontSize: '14px' }}
+              disabled={isPending || totalAddUnits <= 0}
+            >
+              {addStockType === 'apparel'
+                ? `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Sized Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`
+                : `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`}
             </button>
           </form>
         </div>

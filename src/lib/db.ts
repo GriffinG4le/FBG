@@ -692,7 +692,12 @@ export async function logWarehouseStockIn(
   if (quantity <= 0) throw new Error('Quantity must be greater than 0');
   await ensureSkuExists(sku);
 
-  const newRow: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const id = 'led-in-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+  const timestamp = new Date().toISOString();
+
+  const newRow: LedgerRow = {
+    id,
+    timestamp,
     type: 'StockIn',
     sku,
     quantity_delta: quantity,
@@ -702,23 +707,23 @@ export async function logWarehouseStockIn(
     notes: notes || 'Warehouse stock intake'
   };
 
-  try {
-    const { data, error } = await supabase.from('ledger').insert(newRow).select().single();
-    if (!error && data) {
-      memoryLedger.unshift(data);
-      return data;
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('ledger').insert(newRow).select().single();
+      if (!error && data) {
+        memoryLedger.unshift(data);
+        return data;
+      }
+      if (error) {
+        console.warn("Supabase ledger insert warning:", error);
+      }
+    } catch (e) {
+      console.warn("Supabase write failed, writing to memory store:", e);
     }
-  } catch (e) {
-    console.warn("Supabase write failed, writing to memory store:", e);
   }
 
-  const created: LedgerRow = {
-    ...newRow,
-    id: 'led-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-    timestamp: new Date().toISOString()
-  };
-  memoryLedger.unshift(created);
-  return created;
+  memoryLedger.unshift(newRow);
+  return newRow;
 }
 
 export async function logDynamicWarehouseStockIn(params: {
@@ -758,6 +763,10 @@ export async function logBatchWarehouseStockIn(params: {
   const results: LedgerRow[] = [];
   const cleanCategory = params.category.trim();
   const cleanColor = params.color.trim() || 'Standard';
+  const targetLocation = params.locationId || 'wh-main';
+  const staff = params.staffId || 'Warehouse Staff';
+
+  const rowsToInsert: LedgerRow[] = [];
 
   for (const v of params.variants) {
     if (v.quantity > 0) {
@@ -765,17 +774,36 @@ export async function logBatchWarehouseStockIn(params: {
       const sku = `${cleanCategory}|${cleanColor}|${cleanSize}`;
       await ensureSkuExists(sku, params.price);
 
-      const row = await logWarehouseStockIn(
+      const id = 'led-in-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+      const row: LedgerRow = {
+        id,
+        timestamp: new Date().toISOString(),
+        type: 'StockIn',
         sku,
-        v.quantity,
-        params.locationId || 'wh-main',
-        params.staffId || 'Warehouse Staff',
-        params.notes || `Batch intake for ${cleanCategory} (${cleanColor} / ${cleanSize})`
-      );
+        quantity_delta: v.quantity,
+        location_id: targetLocation,
+        staff_id: staff,
+        amount: 0,
+        notes: params.notes || `Batch intake for ${cleanCategory} (${cleanColor} / ${cleanSize})`
+      };
+      rowsToInsert.push(row);
       results.push(row);
     }
   }
 
+  if (rowsToInsert.length > 0 && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('ledger').insert(rowsToInsert).select();
+      if (!error && data && data.length > 0) {
+        memoryLedger.unshift(...data);
+        return data;
+      }
+    } catch (e) {
+      console.warn("Supabase batch ledger insert failed:", e);
+    }
+  }
+
+  memoryLedger.unshift(...rowsToInsert);
   return results;
 }
 
@@ -794,8 +822,11 @@ export async function allocateStockTransfer(
   await ensureSkuExists(sku);
 
   const transferNote = notes || `Stock transfer from ${fromLocationId} to ${toLocationId}`;
+  const timestamp = new Date().toISOString();
 
-  const sourcePayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const sourceRow: LedgerRow = {
+    id: 'led-s-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7),
+    timestamp,
     type: 'Transfer',
     sku,
     quantity_delta: -quantity,
@@ -805,7 +836,9 @@ export async function allocateStockTransfer(
     notes: transferNote
   };
 
-  const destPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const destRow: LedgerRow = {
+    id: 'led-d-' + (Date.now() + 1) + '-' + Math.random().toString(36).substr(2, 7),
+    timestamp,
     type: 'Transfer',
     sku,
     quantity_delta: quantity,
@@ -815,31 +848,20 @@ export async function allocateStockTransfer(
     notes: transferNote
   };
 
-  try {
-    const { data: sourceData, error: err1 } = await supabase.from('ledger').insert(sourcePayload).select().single();
-    const { data: destData, error: err2 } = await supabase.from('ledger').insert(destPayload).select().single();
-
-    if (!err1 && !err2 && sourceData && destData) {
-      memoryLedger.unshift(sourceData, destData);
-      return { sourceRow: sourceData, destRow: destData };
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.from('ledger').insert([sourceRow, destRow]).select();
+      if (!error && data && data.length === 2) {
+        memoryLedger.unshift(data[0], data[1]);
+        return { sourceRow: data[0], destRow: data[1] };
+      }
+    } catch (e) {
+      console.warn("Supabase transfer write failed, using memory store:", e);
     }
-  } catch (e) {
-    console.warn("Supabase transfer write failed, using memory store:", e);
   }
 
-  const sRow: LedgerRow = {
-    ...sourcePayload,
-    id: 'led-s-' + Date.now(),
-    timestamp: new Date().toISOString()
-  };
-  const dRow: LedgerRow = {
-    ...destPayload,
-    id: 'led-d-' + (Date.now() + 1),
-    timestamp: new Date().toISOString()
-  };
-
-  memoryLedger.unshift(sRow, dRow);
-  return { sourceRow: sRow, destRow: dRow };
+  memoryLedger.unshift(sourceRow, destRow);
+  return { sourceRow, destRow };
 }
 
 // ==============================================================================
@@ -1027,7 +1049,11 @@ export async function fulfillOrder(params: {
   const isSwap = originalSku !== actualSku;
   const eventType: 'Dispatch' | 'Swap' = isSwap ? 'Swap' : 'Dispatch';
 
-  const fulfillmentPayload = {
+  const fulfillmentId = 'ful-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+  const fulfillmentTimestamp = new Date().toISOString();
+
+  const fulfillmentPayload: Fulfillment = {
+    id: fulfillmentId,
     order_id: orderId,
     source_prefix: sourcePrefix,
     order_ref: orderRef,
@@ -1038,30 +1064,35 @@ export async function fulfillOrder(params: {
     override_reason: overrideReason || null,
     location_id: locationId,
     staff_id: staffId,
-    notes: notes || null
+    notes: notes || null,
+    fulfilled_at: fulfillmentTimestamp
   };
 
   let createdFulfillment: Fulfillment;
 
-  try {
-    const { data: fulData, error: fulErr } = await supabase
-      .from('fulfillments')
-      .insert(fulfillmentPayload)
-      .select()
-      .single();
+  if (isSupabaseConfigured) {
+    try {
+      const { data: fulData, error: fulErr } = await supabase
+        .from('fulfillments')
+        .insert(fulfillmentPayload)
+        .select()
+        .single();
 
-    if (!fulErr && fulData) {
-      createdFulfillment = fulData;
-      await supabase.from('orders').update({ status: 'fulfilled' }).eq('id', orderId);
-    } else {
-      throw new Error(fulErr?.message || 'Fulfillment insert failed');
+      if (!fulErr && fulData) {
+        createdFulfillment = fulData;
+        await supabase.from('orders').update({ status: 'fulfilled' }).eq('id', orderId);
+      } else {
+        throw new Error(fulErr?.message || 'Fulfillment insert failed');
+      }
+    } catch {
+      createdFulfillment = fulfillmentPayload;
+      const ordIndex = memoryOrders.findIndex(o => o.id === orderId);
+      if (ordIndex !== -1) {
+        memoryOrders[ordIndex].status = 'fulfilled';
+      }
     }
-  } catch {
-    createdFulfillment = {
-      ...fulfillmentPayload,
-      id: 'ful-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-      fulfilled_at: new Date().toISOString()
-    };
+  } else {
+    createdFulfillment = fulfillmentPayload;
     const ordIndex = memoryOrders.findIndex(o => o.id === orderId);
     if (ordIndex !== -1) {
       memoryOrders[ordIndex].status = 'fulfilled';
@@ -1070,7 +1101,10 @@ export async function fulfillOrder(params: {
 
   memoryFulfillments.unshift(createdFulfillment);
 
-  const ledgerPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const ledgerId = 'led-ful-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+  const ledgerPayload: LedgerRow = {
+    id: ledgerId,
+    timestamp: new Date().toISOString(),
     type: eventType,
     sku: actualSku,
     quantity_delta: -1,
@@ -1086,24 +1120,24 @@ export async function fulfillOrder(params: {
 
   let createdLedgerRow: LedgerRow;
 
-  try {
-    const { data: ledData, error: ledErr } = await supabase
-      .from('ledger')
-      .insert(ledgerPayload)
-      .select()
-      .single();
+  if (isSupabaseConfigured) {
+    try {
+      const { data: ledData, error: ledErr } = await supabase
+        .from('ledger')
+        .insert(ledgerPayload)
+        .select()
+        .single();
 
-    if (!ledErr && ledData) {
-      createdLedgerRow = ledData;
-    } else {
-      throw new Error(ledErr?.message || 'Ledger write failed');
+      if (!ledErr && ledData) {
+        createdLedgerRow = ledData;
+      } else {
+        throw new Error(ledErr?.message || 'Ledger write failed');
+      }
+    } catch {
+      createdLedgerRow = ledgerPayload;
     }
-  } catch {
-    createdLedgerRow = {
-      ...ledgerPayload,
-      id: 'led-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-      timestamp: new Date().toISOString()
-    };
+  } else {
+    createdLedgerRow = ledgerPayload;
   }
 
   memoryLedger.unshift(createdLedgerRow);
@@ -1137,20 +1171,25 @@ export async function quickWalkUpFulfill(params: {
 
   let matchedOrder: Order | null = null;
 
-  try {
-    const { data: existing } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('order_ref', cleanRef)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  if (isSupabaseConfigured) {
+    try {
+      const { data: existing } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('order_ref', cleanRef)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (existing) {
-      matchedOrder = existing;
+      if (existing) {
+        matchedOrder = existing;
+      }
+    } catch {
+      const memFound = memoryOrders.find(o => o.order_ref === cleanRef && o.status === 'pending');
+      if (memFound) matchedOrder = memFound;
     }
-  } catch {
+  } else {
     const memFound = memoryOrders.find(o => o.order_ref === cleanRef && o.status === 'pending');
     if (memFound) matchedOrder = memFound;
   }
@@ -1158,7 +1197,9 @@ export async function quickWalkUpFulfill(params: {
   let finalOrder: Order;
 
   if (!matchedOrder) {
-    const orderPayload = {
+    const orderId = 'ord-direct-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+    const orderPayload: Order = {
+      id: orderId,
       source_prefix: sourcePrefix,
       order_ref: cleanRef,
       original_sku: params.originalSku,
@@ -1166,22 +1207,23 @@ export async function quickWalkUpFulfill(params: {
       customer_name: params.customerName || null,
       customer_phone: params.customerPhone || null,
       channel: params.channel || 'Event',
-      status: 'pending' as const
+      status: 'pending' as const,
+      created_at: new Date().toISOString()
     };
 
-    try {
-      const { data, error } = await supabase.from('orders').insert(orderPayload).select().single();
-      if (!error && data) {
-        finalOrder = data;
-      } else {
-        throw new Error(error?.message || 'Order insert failed');
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.from('orders').insert(orderPayload).select().single();
+        if (!error && data) {
+          finalOrder = data;
+        } else {
+          finalOrder = orderPayload;
+        }
+      } catch {
+        finalOrder = orderPayload;
       }
-    } catch {
-      finalOrder = {
-        ...orderPayload,
-        id: 'ord-direct-' + Date.now(),
-        created_at: new Date().toISOString()
-      };
+    } else {
+      finalOrder = orderPayload;
     }
     memoryOrders.unshift(finalOrder);
   } else {
@@ -1189,12 +1231,14 @@ export async function quickWalkUpFulfill(params: {
     if (params.customerName || params.customerPhone) {
       finalOrder.customer_name = params.customerName || finalOrder.customer_name;
       finalOrder.customer_phone = params.customerPhone || finalOrder.customer_phone;
-      try {
-        await supabase.from('orders').update({
-          customer_name: finalOrder.customer_name,
-          customer_phone: finalOrder.customer_phone
-        }).eq('id', finalOrder.id);
-      } catch {}
+      if (isSupabaseConfigured) {
+        try {
+          await supabase.from('orders').update({
+            customer_name: finalOrder.customer_name,
+            customer_phone: finalOrder.customer_phone
+          }).eq('id', finalOrder.id);
+        } catch {}
+      }
     }
   }
 
@@ -1237,10 +1281,14 @@ export async function processQuickSwap(params: {
   await ensureSkuExists(newSku);
 
   let order: Order | undefined;
-  try {
-    const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
-    order = data || memoryOrders.find(o => o.id === orderId);
-  } catch {
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
+      order = data || memoryOrders.find(o => o.id === orderId);
+    } catch {
+      order = memoryOrders.find(o => o.id === orderId);
+    }
+  } else {
     order = memoryOrders.find(o => o.id === orderId);
   }
 
@@ -1249,9 +1297,12 @@ export async function processQuickSwap(params: {
   }
 
   const oldSku = order.original_sku;
+  const timestamp = new Date().toISOString();
 
   // 1. Return old SKU to stock (+1)
-  const returnPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const returnPayload: LedgerRow = {
+    id: 'led-sw-in-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7),
+    timestamp,
     type: 'Swap',
     sku: oldSku,
     quantity_delta: 1,
@@ -1263,7 +1314,9 @@ export async function processQuickSwap(params: {
   };
 
   // 2. Dispatch new SKU from stock (-1)
-  const dispatchPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const dispatchPayload: LedgerRow = {
+    id: 'led-sw-out-' + (Date.now() + 1) + '-' + Math.random().toString(36).substr(2, 7),
+    timestamp,
     type: 'Swap',
     sku: newSku,
     quantity_delta: -1,
@@ -1274,25 +1327,16 @@ export async function processQuickSwap(params: {
     notes: notes ? `Swapped from ${oldSku} | ${notes}` : `Dispensed ${newSku} in exchange for ${oldSku}`
   };
 
-  try {
-    await supabase.from('ledger').insert([returnPayload, dispatchPayload]);
-    await supabase.from('orders').update({ status: 'swapped', original_sku: newSku }).eq('id', orderId);
-  } catch (e) {
-    console.warn("Supabase swap write failed, updating memory store:", e);
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('ledger').insert([returnPayload, dispatchPayload]);
+      await supabase.from('orders').update({ status: 'swapped', original_sku: newSku }).eq('id', orderId);
+    } catch (e) {
+      console.warn("Supabase swap write failed, updating memory store:", e);
+    }
   }
 
-  const rRow: LedgerRow = {
-    ...returnPayload,
-    id: 'led-sw-in-' + Date.now(),
-    timestamp: new Date().toISOString()
-  };
-  const dRow: LedgerRow = {
-    ...dispatchPayload,
-    id: 'led-sw-out-' + (Date.now() + 1),
-    timestamp: new Date().toISOString()
-  };
-
-  memoryLedger.unshift(rRow, dRow);
+  memoryLedger.unshift(returnPayload, dispatchPayload);
 
   const ordIdx = memoryOrders.findIndex(o => o.id === orderId);
   if (ordIdx !== -1) {
@@ -1318,10 +1362,14 @@ export async function processQuickRefund(params: {
   const { orderId, refundAmount, locationId, staffId = 'Staff', notes } = params;
 
   let order: Order | undefined;
-  try {
-    const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
-    order = data || memoryOrders.find(o => o.id === orderId);
-  } catch {
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await supabase.from('orders').select('*').eq('id', orderId).maybeSingle();
+      order = data || memoryOrders.find(o => o.id === orderId);
+    } catch {
+      order = memoryOrders.find(o => o.id === orderId);
+    }
+  } else {
     order = memoryOrders.find(o => o.id === orderId);
   }
 
@@ -1332,7 +1380,9 @@ export async function processQuickRefund(params: {
   const skuReturned = order.original_sku;
   const actualRefund = refundAmount !== undefined ? refundAmount : (order.amount_paid || 0);
 
-  const refundLedgerPayload: Omit<LedgerRow, 'id' | 'timestamp'> = {
+  const refundLedgerPayload: LedgerRow = {
+    id: 'led-ref-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7),
+    timestamp: new Date().toISOString(),
     type: 'Refund',
     sku: skuReturned,
     quantity_delta: 1,
@@ -1343,20 +1393,16 @@ export async function processQuickRefund(params: {
     notes: notes ? `Refund: ${notes}` : `Refund processed for order ${order.source_prefix}-${order.order_ref}`
   };
 
-  try {
-    await supabase.from('ledger').insert(refundLedgerPayload);
-    await supabase.from('orders').update({ status: 'refunded' }).eq('id', orderId);
-  } catch (e) {
-    console.warn("Supabase refund write failed, updating memory store:", e);
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('ledger').insert(refundLedgerPayload);
+      await supabase.from('orders').update({ status: 'refunded' }).eq('id', orderId);
+    } catch (e) {
+      console.warn("Supabase refund write failed, updating memory store:", e);
+    }
   }
 
-  const refRow: LedgerRow = {
-    ...refundLedgerPayload,
-    id: 'led-ref-' + Date.now(),
-    timestamp: new Date().toISOString()
-  };
-
-  memoryLedger.unshift(refRow);
+  memoryLedger.unshift(refundLedgerPayload);
 
   const ordIdx = memoryOrders.findIndex(o => o.id === orderId);
   if (ordIdx !== -1) {
@@ -1369,8 +1415,6 @@ export async function processQuickRefund(params: {
     refundAmount: actualRefund
   };
 }
-
-
 
 export async function importTikoHubOrders(
   rawOrders: RawParsedOrder[],
@@ -1398,13 +1442,15 @@ export async function importTikoHubOrders(
         active: true,
         created_at: new Date().toISOString()
       };
-      try {
-        await supabase.from('order_prefixes').insert({
-          prefix,
-          label: newPrefixRow.label,
-          active: true
-        });
-      } catch {}
+      if (isSupabaseConfigured) {
+        try {
+          await supabase.from('order_prefixes').insert({
+            prefix,
+            label: newPrefixRow.label,
+            active: true
+          });
+        } catch {}
+      }
       memoryPrefixes.push(newPrefixRow);
     }
   }
@@ -1419,7 +1465,7 @@ export async function importTikoHubOrders(
   }
 
   const incomingDecidedMap = new Map<string, number>();
-  const toInsert: any[] = [];
+  const toInsert: Order[] = [];
   let duplicates = 0;
 
   for (const ro of rawOrders) {
@@ -1435,6 +1481,7 @@ export async function importTikoHubOrders(
       duplicates++;
     } else {
       toInsert.push({
+        id: 'ord-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7),
         source_prefix: ro.source_prefix,
         order_ref: ro.order_ref,
         original_sku: ro.original_sku,
@@ -1442,28 +1489,27 @@ export async function importTikoHubOrders(
         customer_name: ro.customer_name || null,
         customer_phone: ro.customer_phone || null,
         channel: ro.channel,
-        status: 'pending'
+        status: 'pending',
+        created_at: new Date().toISOString()
       });
       incomingDecidedMap.set(key, decidedCount + 1);
     }
   }
 
   if (toInsert.length > 0) {
-    try {
-      const { data, error } = await supabase.from('orders').insert(toInsert).select();
-      if (!error && data) {
-        memoryOrders.unshift(...data);
-      } else {
-        throw new Error(error?.message);
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.from('orders').insert(toInsert).select();
+        if (!error && data && data.length > 0) {
+          memoryOrders.unshift(...data);
+        } else {
+          memoryOrders.unshift(...toInsert);
+        }
+      } catch {
+        memoryOrders.unshift(...toInsert);
       }
-    } catch {
-      for (const item of toInsert) {
-        memoryOrders.unshift({
-          ...item,
-          id: 'ord-' + Math.random().toString(36).substr(2, 9),
-          created_at: new Date().toISOString()
-        });
-      }
+    } else {
+      memoryOrders.unshift(...toInsert);
     }
   }
 

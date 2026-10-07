@@ -4,7 +4,7 @@
 
 -- 1. LOCATIONS TABLE (Warehouses & Event Tents)
 CREATE TABLE IF NOT EXISTS locations (
-    id text PRIMARY KEY,
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name text NOT NULL,
     type text NOT NULL CHECK (type IN ('warehouse', 'event')),
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS catalog (
 
 -- 4. ORDERS TABLE
 CREATE TABLE IF NOT EXISTS orders (
-    id text PRIMARY KEY,
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
     source_prefix text NOT NULL DEFAULT 'ORD',
     order_ref text NOT NULL,
     original_sku text NOT NULL,
@@ -39,13 +39,13 @@ CREATE TABLE IF NOT EXISTS orders (
     customer_name text,
     customer_phone text,
     channel text NOT NULL DEFAULT 'Online' CHECK (channel IN ('Online', 'Event', 'Card', 'Manual')),
-    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'fulfilled', 'cancelled')),
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'fulfilled', 'swapped', 'refunded', 'cancelled')),
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- 5. FULFILLMENTS TABLE (Dispatch & Swap Records)
 CREATE TABLE IF NOT EXISTS fulfillments (
-    id text PRIMARY KEY,
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
     order_id text NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     source_prefix text NOT NULL,
     order_ref text NOT NULL,
@@ -62,9 +62,9 @@ CREATE TABLE IF NOT EXISTS fulfillments (
 
 -- 6. IMMUTABLE LEDGER TABLE (Stock Movements & Financial Trail)
 CREATE TABLE IF NOT EXISTS ledger (
-    id text PRIMARY KEY,
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
     timestamp timestamptz NOT NULL DEFAULT now(),
-    type text NOT NULL CHECK (type IN ('StockIn', 'Transfer', 'Dispatch', 'Swap', 'Correction')),
+    type text NOT NULL CHECK (type IN ('StockIn', 'Transfer', 'Dispatch', 'Swap', 'Refund', 'Correction')),
     sku text NOT NULL,
     quantity_delta integer NOT NULL,
     location_id text NOT NULL REFERENCES locations(id) ON UPDATE CASCADE,
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS ledger (
 
 -- 7. EVENT STOCK TRANSFERS & 2-STEP RECONCILIATION TABLE
 CREATE TABLE IF NOT EXISTS event_transfers (
-    id text PRIMARY KEY,
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
     event_id text NOT NULL REFERENCES locations(id) ON UPDATE CASCADE,
     sku text NOT NULL,
     allocated_qty integer NOT NULL DEFAULT 0,
@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS event_transfers (
     variance integer,
     status text NOT NULL DEFAULT 'dispatched_to_event' CHECK (status IN ('dispatched_to_event', 'return_counted_by_staff', 'verified_in_warehouse')),
     notes text,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- 8. STAFF / MERCHANT PROFILES TABLE
+CREATE TABLE IF NOT EXISTS staff_profiles (
+    id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name text NOT NULL,
+    role text NOT NULL CHECK (role IN ('admin', 'warehouse', 'event_staff')),
+    assigned_location_ids text[] NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -117,6 +126,7 @@ ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fulfillments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE event_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE staff_profiles ENABLE ROW LEVEL SECURITY;
 
 -- Allow public / authenticated access to all tables for fulfillment operations
 CREATE POLICY "Allow public all locations" ON locations FOR ALL USING (true) WITH CHECK (true);
@@ -126,6 +136,7 @@ CREATE POLICY "Allow public all orders" ON orders FOR ALL USING (true) WITH CHEC
 CREATE POLICY "Allow public all fulfillments" ON fulfillments FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public all ledger" ON ledger FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public all event_transfers" ON event_transfers FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all staff_profiles" ON staff_profiles FOR ALL USING (true) WITH CHECK (true);
 
 -- ==============================================================================
 -- INITIAL SEED DATA (Clean Base State)
@@ -143,3 +154,11 @@ INSERT INTO order_prefixes (prefix, label, active) VALUES
     ('TKH', 'TikoHub Mobile / POS', true),
     ('MANUAL', 'Tent Walk-Up Direct Entry', true)
 ON CONFLICT (prefix) DO NOTHING;
+
+-- Seed Standard Staff Members
+INSERT INTO staff_profiles (id, name, role, assigned_location_ids) VALUES
+    ('st-jane', 'Jane Wambui', 'event_staff', ARRAY['evt-driftwood', 'evt-sp7s']),
+    ('st-kelvin', 'Kelvin Ochieng', 'event_staff', ARRAY['evt-sp7s']),
+    ('st-sarah', 'Sarah (Warehouse Lead)', 'warehouse', ARRAY['wh-main']),
+    ('st-winston', 'Winston (Admin)', 'admin', ARRAY['wh-main', 'evt-sp7s', 'evt-driftwood'])
+ON CONFLICT (id) DO NOTHING;
