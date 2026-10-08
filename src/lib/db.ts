@@ -88,7 +88,9 @@ export interface StockOnHandItem {
 export interface StaffProfile {
   id: string;
   name: string;
-  role: 'admin' | 'warehouse' | 'event_staff';
+  username?: string;
+  pin?: string;
+  role: 'superadmin' | 'admin' | 'warehouse' | 'event_staff';
   assigned_location_ids: string[];
 }
 
@@ -120,14 +122,11 @@ const INITIAL_PREFIXES: OrderPrefix[] = [
   { prefix: 'ORD', label: 'TikoHub Direct Web Store', active: true, created_at: new Date().toISOString() },
   { prefix: 'SH', label: 'Shopify Secondary Channel', active: true, created_at: new Date().toISOString() },
   { prefix: 'TKH', label: 'TikoHub Mobile / POS', active: true, created_at: new Date().toISOString() },
-  { prefix: 'MANUAL', 'label': 'Tent Walk-Up Direct Entry', active: true, created_at: new Date().toISOString() }
+  { prefix: 'MANUAL', label: 'Tent Walk-Up Direct Entry', active: true, created_at: new Date().toISOString() }
 ];
 
 const INITIAL_STAFF: StaffProfile[] = [
-  { id: 'st-jane', name: 'Jane Wambui', role: 'event_staff', assigned_location_ids: ['evt-driftwood', 'evt-sp7s'] },
-  { id: 'st-kelvin', name: 'Kelvin Ochieng', role: 'event_staff', assigned_location_ids: ['evt-sp7s'] },
-  { id: 'st-sarah', name: 'Sarah (Warehouse Lead)', role: 'warehouse', assigned_location_ids: ['wh-main'] },
-  { id: 'st-winston', name: 'Winston (Admin)', role: 'admin', assigned_location_ids: ['wh-main', 'evt-sp7s', 'evt-driftwood'] }
+  { id: 'usr-griffin', name: 'Griffin', username: 'griffin', pin: '1234', role: 'superadmin', assigned_location_ids: ['*'] }
 ];
 
 const INITIAL_CATALOG: CatalogItem[] = [
@@ -435,7 +434,7 @@ export async function createEventLocation(name: string, venue?: string): Promise
 export async function getStaffProfiles(): Promise<StaffProfile[]> {
   if (isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase.from('staff_profiles').select('*').order('name', { ascending: true });
+      const { data, error } = await supabase.from('staff_profiles').select('*').order('created_at', { ascending: true });
       if (!error && data && data.length > 0) return data;
     } catch {
       // fallback
@@ -446,16 +445,20 @@ export async function getStaffProfiles(): Promise<StaffProfile[]> {
 
 export async function createStaffProfile(params: {
   name: string;
-  role: 'admin' | 'warehouse' | 'event_staff';
+  username?: string;
+  pin?: string;
+  role: 'superadmin' | 'admin' | 'warehouse' | 'event_staff';
   assigned_location_ids?: string[];
 }): Promise<StaffProfile> {
   const cleanName = params.name.trim();
-  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const id = `st-${slug || Date.now().toString()}`;
+  const slug = (params.username || cleanName).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const id = `usr-${slug || Date.now().toString()}`;
 
   const newStaff: StaffProfile = {
     id,
     name: cleanName,
+    username: params.username ? params.username.trim().toLowerCase() : slug,
+    pin: params.pin ? params.pin.trim() : '1234',
     role: params.role,
     assigned_location_ids: params.assigned_location_ids || []
   };
@@ -474,6 +477,38 @@ export async function createStaffProfile(params: {
 
   memoryStaff.push(newStaff);
   return newStaff;
+}
+
+export async function deleteStaffProfile(staffId: string): Promise<void> {
+  if (staffId === 'usr-griffin') {
+    throw new Error("Cannot delete primary Superadmin account.");
+  }
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('staff_profiles').delete().eq('id', staffId);
+    } catch (e) {
+      console.warn("Supabase staff delete failed:", e);
+    }
+  }
+
+  memoryStaff = memoryStaff.filter(s => s.id !== staffId);
+}
+
+export async function updateStaffProfile(staffId: string, updates: Partial<StaffProfile>): Promise<StaffProfile> {
+  const staff = memoryStaff.find(s => s.id === staffId);
+  if (!staff) throw new Error('Staff member not found');
+
+  Object.assign(staff, updates);
+
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('staff_profiles').update(updates).eq('id', staffId);
+    } catch (e) {
+      console.warn("Supabase staff update failed:", e);
+    }
+  }
+  return staff;
 }
 
 export async function assignStaffToLocation(staffId: string, locationId: string): Promise<StaffProfile> {
@@ -1268,6 +1303,109 @@ export async function quickWalkUpFulfill(params: {
   };
 }
 
+export async function quickBatchWalkUpFulfill(params: {
+  sourcePrefix: string;
+  orderRef: string;
+  items: { sku: string; quantity: number; price?: number }[];
+  locationId: string;
+  staffId: string;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  channel?: 'Online' | 'Event' | 'Card' | 'Manual';
+  notes?: string | null;
+}): Promise<{
+  orders: Order[];
+  fulfillments: Fulfillment[];
+  ledgerRows: LedgerRow[];
+}> {
+  const sourcePrefix = params.sourcePrefix.trim().toUpperCase() || 'ORD';
+  const cleanRef = params.orderRef.trim().toUpperCase();
+  const catalog = await getCatalog();
+  const timestamp = new Date().toISOString();
+
+  const createdOrders: Order[] = [];
+  const createdFulfillments: Fulfillment[] = [];
+  const createdLedgerRows: LedgerRow[] = [];
+
+  for (const item of params.items) {
+    if (item.quantity <= 0) continue;
+    await ensureSkuExists(item.sku, item.price || 0);
+
+    const unitPrice = item.price || catalog.find(c => c.sku === item.sku)?.price || 0;
+
+    for (let q = 0; q < item.quantity; q++) {
+      const orderId = 'ord-batch-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+      const orderPayload: Order = {
+        id: orderId,
+        source_prefix: sourcePrefix,
+        order_ref: cleanRef,
+        original_sku: item.sku,
+        amount_paid: unitPrice,
+        customer_name: params.customerName || null,
+        customer_phone: params.customerPhone || null,
+        channel: params.channel || 'Event',
+        status: 'fulfilled',
+        created_at: timestamp
+      };
+
+      const fulId = 'ful-batch-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+      const fulPayload: Fulfillment = {
+        id: fulId,
+        order_id: orderId,
+        source_prefix: sourcePrefix,
+        order_ref: cleanRef,
+        original_sku: item.sku,
+        actual_sku: item.sku,
+        price_delta: 0,
+        cash_collected: 0,
+        location_id: params.locationId,
+        staff_id: params.staffId,
+        notes: params.notes || `Handover dispatch (${cleanRef})`,
+        fulfilled_at: timestamp
+      };
+
+      const ledId = 'led-disp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 7);
+      const ledPayload: LedgerRow = {
+        id: ledId,
+        timestamp,
+        type: 'Dispatch',
+        sku: item.sku,
+        quantity_delta: -1,
+        location_id: params.locationId,
+        staff_id: params.staffId,
+        order_id: orderId,
+        fulfillment_id: fulId,
+        amount: unitPrice,
+        notes: params.notes ? `${params.notes} (${cleanRef})` : `Order Handover ${sourcePrefix}-${cleanRef}`
+      };
+
+      createdOrders.push(orderPayload);
+      createdFulfillments.push(fulPayload);
+      createdLedgerRows.push(ledPayload);
+    }
+  }
+
+  if (isSupabaseConfigured && createdOrders.length > 0) {
+    try {
+      await supabase.from('orders').insert(createdOrders);
+      await supabase.from('fulfillments').insert(createdFulfillments);
+      await supabase.from('ledger').insert(createdLedgerRows);
+    } catch (e) {
+      console.warn("Supabase batch handover insert failed, using memory store:", e);
+    }
+  }
+
+  memoryOrders.unshift(...createdOrders);
+  memoryFulfillments.unshift(...createdFulfillments);
+  memoryLedger.unshift(...createdLedgerRows);
+
+  return {
+    orders: createdOrders,
+    fulfillments: createdFulfillments,
+    ledgerRows: createdLedgerRows
+  };
+}
+
 export async function processQuickSwap(params: {
   orderId: string;
   newSku: string;
@@ -1528,6 +1666,7 @@ export async function clearAllData(): Promise<void> {
     await supabase.from('orders').delete().neq('order_ref', 'never_match_xyz');
     await supabase.from('catalog').delete().neq('sku', 'never_match_xyz');
     await supabase.from('locations').delete().neq('id', 'wh-main');
+    await supabase.from('staff_profiles').delete().neq('id', 'usr-griffin');
   } catch (e) {
     console.warn("Supabase clear failed, clearing memory store:", e);
   }
@@ -1537,6 +1676,7 @@ export async function clearAllData(): Promise<void> {
   memoryLedger = [];
   memoryEventTransfers = [];
   memoryCatalog = [];
+  memoryStaff = [...INITIAL_STAFF];
   memoryLocations = [
     { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() }
   ];
@@ -1550,12 +1690,14 @@ export async function resetDatabase(): Promise<void> {
     await supabase.from('order_prefixes').delete().neq('prefix', 'never_match_xyz');
     await supabase.from('catalog').delete().neq('sku', 'never_match_xyz');
     await supabase.from('locations').delete().neq('id', 'never_match_xyz');
+    await supabase.from('staff_profiles').delete().neq('id', 'never_match_xyz');
 
     await supabase.from('locations').insert(INITIAL_LOCATIONS);
     await supabase.from('order_prefixes').insert(INITIAL_PREFIXES);
     await supabase.from('catalog').insert(INITIAL_CATALOG);
     await supabase.from('ledger').insert(INITIAL_LEDGER);
     await supabase.from('orders').insert(INITIAL_ORDERS);
+    await supabase.from('staff_profiles').insert(INITIAL_STAFF);
   } catch (e) {
     console.warn("Supabase reset query failed, resetting memory database:", e);
   }
@@ -1567,5 +1709,8 @@ export async function resetDatabase(): Promise<void> {
   memoryFulfillments = [];
   memoryLedger = [...INITIAL_LEDGER];
   memoryEventTransfers = [...INITIAL_EVENT_TRANSFERS];
+  memoryStaff = [...INITIAL_STAFF];
 }
+
+
 

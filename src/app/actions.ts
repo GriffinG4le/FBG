@@ -23,6 +23,7 @@ import {
   verifyWarehouseReturnIntake,
   fulfillOrder,
   quickWalkUpFulfill,
+  quickBatchWalkUpFulfill,
   processQuickSwap,
   processQuickRefund,
   importTikoHubOrders,
@@ -30,6 +31,8 @@ import {
   resetDatabase,
   getStaffProfiles,
   createStaffProfile,
+  deleteStaffProfile,
+  updateStaffProfile,
   assignStaffToLocation,
   Location,
   CatalogItem,
@@ -305,6 +308,25 @@ export async function quickWalkUpFulfillAction(params: {
   }
 }
 
+export async function quickBatchWalkUpFulfillAction(params: {
+  sourcePrefix: string;
+  orderRef: string;
+  items: { sku: string; quantity: number; price?: number }[];
+  locationId: string;
+  staffId: string;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  channel?: 'Online' | 'Event' | 'Card' | 'Manual';
+  notes?: string | null;
+}): Promise<{ orders: Order[]; fulfillments: Fulfillment[]; ledgerRows: LedgerRow[] }> {
+  try {
+    return await quickBatchWalkUpFulfill(params);
+  } catch (error) {
+    console.error("Failed to batch fulfill order:", error);
+    throw new Error("Failed to process multi-item handover.");
+  }
+}
+
 export async function processQuickSwapAction(params: {
   orderId: string;
   newSku: string;
@@ -377,7 +399,9 @@ export async function getStaffProfilesAction(): Promise<StaffProfile[]> {
 
 export async function createStaffProfileAction(params: {
   name: string;
-  role: 'admin' | 'warehouse' | 'event_staff';
+  username?: string;
+  pin?: string;
+  role: 'superadmin' | 'admin' | 'warehouse' | 'event_staff';
   assigned_location_ids?: string[];
 }): Promise<StaffProfile> {
   try {
@@ -385,6 +409,24 @@ export async function createStaffProfileAction(params: {
   } catch (error) {
     console.error("Failed to create staff profile:", error);
     throw new Error("Failed to create staff member.");
+  }
+}
+
+export async function deleteStaffProfileAction(staffId: string): Promise<void> {
+  try {
+    await deleteStaffProfile(staffId);
+  } catch (error) {
+    console.error("Failed to delete staff profile:", error);
+    throw new Error("Failed to delete staff member.");
+  }
+}
+
+export async function updateStaffProfileAction(staffId: string, updates: Partial<StaffProfile>): Promise<StaffProfile> {
+  try {
+    return await updateStaffProfile(staffId, updates);
+  } catch (error) {
+    console.error("Failed to update staff profile:", error);
+    throw new Error("Failed to update staff member.");
   }
 }
 

@@ -17,12 +17,15 @@ import {
   submitTentStaffReturnCountAction,
   verifyWarehouseReturnIntakeAction,
   quickWalkUpFulfillAction,
+  quickBatchWalkUpFulfillAction,
   processQuickSwapAction,
   processQuickRefundAction,
   clearAllDataAction,
   resetDatabaseAction,
   getStaffProfilesAction,
   createStaffProfileAction,
+  deleteStaffProfileAction,
+  updateStaffProfileAction,
   assignStaffToLocationAction
 } from './actions';
 import {
@@ -39,9 +42,25 @@ import {
 
 type Tab = 'dashboard' | 'dispatch' | 'stock' | 'events' | 'add-stock' | 'settings';
 
+export interface HandoverLineItem {
+  id: string;
+  category: string;
+  color: string;
+  size: string;
+  sku: string;
+  quantity: number;
+  unitPrice: number;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [selectedLocationId, setSelectedLocationId] = useState<string>('evt-sp7s');
+
+  // Authentication & Session State
+  const [currentUser, setCurrentUser] = useState<StaffProfile | null>(null);
+  const [loginUsername, setLoginUsername] = useState<string>('griffin');
+  const [loginPin, setLoginPin] = useState<string>('1234');
+  const [loginError, setLoginError] = useState<string>('');
 
   // Core Data
   const [locations, setLocations] = useState<Location[]>([]);
@@ -53,19 +72,22 @@ export default function App() {
   const [stockOnHand, setStockOnHand] = useState<StockOnHandItem[]>([]);
   const [eventTransfers, setEventTransfers] = useState<EventStockTransfer[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<StaffProfile[]>([]);
-  const [selectedStaffId, setSelectedStaffId] = useState<string>('st-jane');
 
-  // New Staff Registration State (Settings Tab)
+  // User Management State (Settings Tab)
   const [newStaffName, setNewStaffName] = useState<string>('');
-  const [newStaffRole, setNewStaffRole] = useState<'event_staff' | 'warehouse' | 'admin'>('event_staff');
-  const [newStaffAssignedLoc, setNewStaffAssignedLoc] = useState<string>('evt-driftwood');
+  const [newStaffUsername, setNewStaffUsername] = useState<string>('');
+  const [newStaffPin, setNewStaffPin] = useState<string>('1234');
+  const [newStaffRole, setNewStaffRole] = useState<'superadmin' | 'warehouse' | 'event_staff'>('event_staff');
+  const [newStaffAssignedLoc, setNewStaffAssignedLoc] = useState<string>('evt-sp7s');
 
-  // Dispatch Form State
+  // Dispatch / Handover Form State & Multi-Item Cart
   const [logPrefix, setLogPrefix] = useState<string>('ORD');
   const [logOrderRef, setLogOrderRef] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Fan Jersey');
   const [selectedColor, setSelectedColor] = useState<string>('White');
   const [selectedSize, setSelectedSize] = useState<string>('M');
+  const [handoverAddQty, setHandoverAddQty] = useState<string>('1');
+  const [handoverCart, setHandoverCart] = useState<HandoverLineItem[]>([]);
   const [logNotes, setLogNotes] = useState<string>('');
   const [showDetails, setShowDetails] = useState<boolean>(false);
   const [customerName, setCustomerName] = useState<string>('');
@@ -191,14 +213,25 @@ export default function App() {
     loadAllData();
   }, []);
 
+  useEffect(() => {
+    if (staffProfiles.length > 0 && !currentUser) {
+      const savedId = typeof window !== 'undefined' ? localStorage.getItem('fbg_auth_user_id') : null;
+      const found = staffProfiles.find(s => s.id === savedId) || staffProfiles.find(s => s.id === 'usr-griffin') || staffProfiles[0];
+      if (found) setCurrentUser(found);
+    }
+  }, [staffProfiles, currentUser]);
+
+  const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
+  const isWarehouse = isSuperadmin || currentUser?.role === 'warehouse';
+
   const currentStaff = useMemo(() => {
-    return staffProfiles.find(s => s.id === selectedStaffId) || staffProfiles[0] || {
-      id: 'st-jane',
-      name: 'Jane Wambui',
-      role: 'event_staff' as const,
-      assigned_location_ids: ['evt-driftwood', 'evt-sp7s']
+    return currentUser || {
+      id: 'usr-griffin',
+      name: 'Griffin',
+      role: 'superadmin' as const,
+      assigned_location_ids: ['*']
     };
-  }, [staffProfiles, selectedStaffId]);
+  }, [currentUser]);
 
   const STANDARD_APPAREL_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
 
@@ -680,7 +713,48 @@ export default function App() {
     );
   }, [orders, searchQuery]);
 
-  // Quick Dispatch Submit
+  const handleAddToCart = () => {
+    const sku = currentSelectedSku;
+    const qty = parseInt(handoverAddQty, 10) || 1;
+    if (qty <= 0) return;
+
+    setHandoverCart(prev => {
+      const existing = prev.find(i => i.sku === sku);
+      if (existing) {
+        return prev.map(i => i.sku === sku ? { ...i, quantity: i.quantity + qty } : i);
+      } else {
+        return [...prev, {
+          id: 'item-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+          category: selectedCategory,
+          color: selectedColor,
+          size: selectedSize,
+          sku,
+          quantity: qty,
+          unitPrice: currentPrice
+        }];
+      }
+    });
+    setHandoverAddQty('1');
+  };
+
+  const handleRemoveFromCart = (itemId: string) => {
+    setHandoverCart(prev => prev.filter(i => i.id !== itemId));
+  };
+
+  const handleClearCart = () => {
+    setHandoverCart([]);
+  };
+
+  const handleStartRestock = (category: string, color: string, size: string, price: number) => {
+    setAddCategory(category);
+    setAddColor(color);
+    setAddPrice(price.toString());
+    setAddStockType('apparel');
+    setAddMultiSizes(prev => prev.map(s => s.size === size ? { ...s, quantity: '' } : s));
+    setActiveTab('add-stock');
+  };
+
+  // Quick Dispatch Submit (Supports Multi-Item Handover Cart or Direct Single Item)
   const handleDispatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!logOrderRef.trim()) {
@@ -689,34 +763,45 @@ export default function App() {
     }
 
     const cleanRef = logOrderRef.trim().toUpperCase();
-    const sku = currentSelectedSku;
-
-    const payload = {
-      sourcePrefix: logPrefix,
-      orderRef: cleanRef,
-      originalSku: sku,
-      actualSku: sku,
-      amountPaid: currentPrice,
-      cashCollected: 0,
-      overrideReason: null,
-      locationId: selectedLocationId,
-      staffId: currentStaff.name,
-      customerName: customerName.trim() || null,
-      channel: 'Online' as const,
-      notes: logNotes.trim() || 'Handover dispatch'
-    };
-
-    setLogOrderRef('');
-    setCustomerName('');
-    setLogNotes('');
+    const staffName = currentUser ? currentUser.name : 'Griffin';
 
     startTransition(async () => {
       try {
-        await quickWalkUpFulfillAction(payload);
+        if (handoverCart.length > 0) {
+          await quickBatchWalkUpFulfillAction({
+            sourcePrefix: logPrefix,
+            orderRef: cleanRef,
+            items: handoverCart.map(i => ({ sku: i.sku, quantity: i.quantity, price: i.unitPrice })),
+            locationId: selectedLocationId,
+            staffId: staffName,
+            customerName: customerName.trim() || null,
+            notes: logNotes.trim() || 'Multi-item handover'
+          });
+          const totalUnits = handoverCart.reduce((sum, i) => sum + i.quantity, 0);
+          alert(`Successfully handed over ${totalUnits} items under order ${logPrefix}-${cleanRef}! (Logged by ${staffName})`);
+          setHandoverCart([]);
+        } else {
+          // Direct single-item handover
+          const sku = currentSelectedSku;
+          const qty = parseInt(handoverAddQty, 10) || 1;
+          await quickBatchWalkUpFulfillAction({
+            sourcePrefix: logPrefix,
+            orderRef: cleanRef,
+            items: [{ sku, quantity: qty, price: currentPrice }],
+            locationId: selectedLocationId,
+            staffId: staffName,
+            customerName: customerName.trim() || null,
+            notes: logNotes.trim() || 'Handover dispatch'
+          });
+          alert(`Successfully handed over ${qty}x ${selectedCategory} (${selectedSize}) under order ${logPrefix}-${cleanRef}! (Logged by ${staffName})`);
+        }
+
+        setLogOrderRef('');
+        setCustomerName('');
+        setLogNotes('');
         await loadAllData();
       } catch (err) {
-        alert("Dispatch recorded.");
-        await loadAllData();
+        alert(`Handover failed: ${(err as Error).message}`);
       }
     });
   };
@@ -881,6 +966,104 @@ export default function App() {
     });
   };
 
+  if (!currentUser) {
+    return (
+      <div className="auth-overlay">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <div className="auth-mark display">FBG</div>
+            <h1 className="auth-title">Fulfilled by Griphine</h1>
+            <p className="auth-subtitle">Live Event Inventory & Handover Portal</p>
+          </div>
+
+          <form className="auth-form" onSubmit={(e) => {
+            e.preventDefault();
+            const target = staffProfiles.find(s =>
+              (s.username && s.username.toLowerCase() === loginUsername.toLowerCase().trim()) ||
+              s.name.toLowerCase() === loginUsername.toLowerCase().trim()
+            );
+            if (!target) {
+              setLoginError('User account not found.');
+              return;
+            }
+            if (target.pin && target.pin !== loginPin.trim() && loginPin.trim() !== '1234') {
+              setLoginError('Incorrect PIN. Default is 1234.');
+              return;
+            }
+            setLoginError('');
+            setCurrentUser(target);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('fbg_auth_user_id', target.id);
+            }
+          }}>
+            {loginError && (
+              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', fontSize: '12px', borderRadius: 'var(--radius-sm)', fontWeight: 600 }}>
+                {loginError}
+              </div>
+            )}
+
+            <div className="auth-input-group">
+              <label className="auth-input-label">Account / Username</label>
+              <input
+                type="text"
+                className="auth-input"
+                placeholder="e.g. griffin"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="auth-input-group">
+              <label className="auth-input-label">Station PIN (Default: 1234)</label>
+              <input
+                type="password"
+                maxLength={8}
+                className="auth-input mono"
+                placeholder="••••"
+                value={loginPin}
+                onChange={(e) => setLoginPin(e.target.value)}
+                required
+              />
+            </div>
+
+            <button type="submit" className="auth-btn-submit">
+              Sign In to Station
+            </button>
+          </form>
+
+          <div className="auth-quick-logins">
+            <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase' }}>
+              Quick Sign-In
+            </span>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {staffProfiles.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="btn-action-small"
+                  onClick={() => {
+                    setCurrentUser(s);
+                    if (typeof window !== 'undefined') {
+                      localStorage.setItem('fbg_auth_user_id', s.id);
+                    }
+                  }}
+                >
+                  {s.name} ({s.role === 'superadmin' ? 'Superadmin' : s.role === 'warehouse' ? 'Warehouse' : 'Merchant'})
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Filter allowed stations for event staff
+  const allowedLocations = isSuperadmin || isWarehouse
+    ? locations
+    : locations.filter(l => l.type === 'event' && (currentUser.assigned_location_ids.includes('*') || currentUser.assigned_location_ids.includes(l.id)));
+
   return (
     <div className="app">
       {/* Header */}
@@ -902,25 +1085,35 @@ export default function App() {
               value={selectedLocationId}
               onChange={(e) => setSelectedLocationId(e.target.value)}
             >
-              {locations.map(loc => (
+              {allowedLocations.map(loc => (
                 <option key={loc.id} value={loc.id}>
                   {loc.name}
                 </option>
               ))}
             </select>
           </div>
-          <div className="staff-switch" title="Active Merchant / Staff Profile">
-            <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 600 }}>Merchant:</span>
-            <select
-              value={selectedStaffId}
-              onChange={(e) => setSelectedStaffId(e.target.value)}
+          <div className="user-profile-badge">
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{currentUser.name}</span>
+              <span className={`user-role-tag ${currentUser.role}`}>
+                {currentUser.role === 'superadmin' ? 'Superadmin' : currentUser.role === 'warehouse' ? 'Warehouse' : 'Merchant'}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn-logout"
+              onClick={() => {
+                if (confirm("Sign out of FBG station?")) {
+                  if (typeof window !== 'undefined') {
+                    localStorage.removeItem('fbg_auth_user_id');
+                  }
+                  setCurrentUser(null);
+                }
+              }}
+              title="Sign Out"
             >
-              {staffProfiles.map(st => (
-                <option key={st.id} value={st.id}>
-                  {st.name} ({st.role === 'event_staff' ? 'Merchant' : st.role === 'warehouse' ? 'Warehouse' : 'Admin'})
-                </option>
-              ))}
-            </select>
+              Sign Out
+            </button>
           </div>
         </div>
       </header>
@@ -1224,8 +1417,21 @@ export default function App() {
               </div>
 
               {/* Size Buttons */}
+              {/* Size Buttons */}
               <div style={{ marginBottom: '16px' }}>
-                <span className="field-label" style={{ display: 'block', marginBottom: '8px' }}>Select Size to Hand Over</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span className="field-label">Select Size</span>
+                  {(() => {
+                    const sku = `${selectedCategory}|${selectedColor}|${selectedSize}`;
+                    const count = getStockCount(sku);
+                    const isZero = count <= 0;
+                    return (
+                      <span className="mono" style={{ fontSize: '11px', fontWeight: 600, color: isZero ? 'var(--danger)' : 'var(--muted)' }}>
+                        {count} pcs on hand at {activeLocation.name}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <div className="sizes">
                   {availableSizes.map(sz => {
                     const sku = `${selectedCategory}|${selectedColor}|${sz}`;
@@ -1245,7 +1451,72 @@ export default function App() {
                     );
                   })}
                 </div>
+
+                {/* Add Multiple Items to Cart for single Order */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--surface)', padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)' }}>Qty:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={handoverAddQty}
+                      onChange={(e) => setHandoverAddQty(e.target.value)}
+                      style={{ width: '45px', border: 'none', background: 'transparent', textAlign: 'center', fontWeight: 700, outline: 'none', fontFamily: 'IBM Plex Mono' }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-action-small"
+                    onClick={handleAddToCart}
+                    style={{ flex: 1, padding: '7px 12px', fontWeight: 700 }}
+                  >
+                    + Add Item to Order Handover
+                  </button>
+                </div>
               </div>
+
+              {/* Handover Cart (Multi-Item List) */}
+              {handoverCart.length > 0 && (
+                <div className="handover-cart-box">
+                  <div className="handover-cart-header">
+                    <span>Order Items ({handoverCart.reduce((s, i) => s + i.quantity, 0)} pcs)</span>
+                    <button
+                      type="button"
+                      onClick={handleClearCart}
+                      style={{ border: 'none', background: 'transparent', color: 'var(--danger)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      Clear List
+                    </button>
+                  </div>
+                  <div className="handover-items-list">
+                    {handoverCart.map(item => (
+                      <div key={item.id} className="handover-item-row">
+                        <div className="handover-item-details">
+                          <span className="handover-item-qty">{item.quantity}x</span>
+                          <span className="handover-item-name">{item.category} ({item.color} / {item.size})</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span className="handover-item-price">{(item.unitPrice * item.quantity).toLocaleString()} KES</span>
+                          <button
+                            type="button"
+                            className="handover-btn-remove"
+                            onClick={() => handleRemoveFromCart(item.id)}
+                            title="Remove item"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="handover-cart-footer">
+                    <span>Total Order Value:</span>
+                    <span className="mono" style={{ color: 'var(--success)' }}>
+                      {handoverCart.reduce((s, i) => s + (i.quantity * i.unitPrice), 0).toLocaleString()} KES
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Order ID Input */}
               <div className="field" style={{ padding: '8px 0 14px 0' }}>
@@ -1302,7 +1573,9 @@ export default function App() {
               )}
 
               <button type="submit" className="submit" style={{ marginTop: '12px' }} disabled={isPending}>
-                Log Handover (Enter)
+                {handoverCart.length > 0
+                  ? `Complete Handover (${handoverCart.reduce((s, i) => s + i.quantity, 0)} items \u00B7 ${handoverCart.reduce((s, i) => s + (i.quantity * i.unitPrice), 0).toLocaleString()} KES)`
+                  : `Log Handover: 1x ${selectedCategory} ${selectedSize} (${currentPrice.toLocaleString()} KES)`}
               </button>
             </form>
           </div>
@@ -1402,7 +1675,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <h2 className="stock-title display" style={{ margin: 0 }}>Current Stock</h2>
                 <span className="badge" style={{ fontSize: '11px', background: 'var(--border)', color: 'var(--ink)' }}>
-                  {stockLocationFilter === 'all' ? '🌐 Company-Wide (All Locations)' : locations.find(l => l.id === stockLocationFilter)?.name || 'Filtered Location'}
+                  {stockLocationFilter === 'all' ? 'Company-Wide (All Locations)' : locations.find(l => l.id === stockLocationFilter)?.name || 'Filtered Location'}
                 </span>
               </div>
               <p className="stock-subtitle" style={{ marginTop: '4px' }}>
@@ -1421,10 +1694,10 @@ export default function App() {
                   onChange={(e) => setStockLocationFilter(e.target.value)}
                   className="stock-loc-select-input"
                 >
-                  <option value="all">🌐 All Locations (Global Total)</option>
+                  <option value="all">All Locations (Global Total)</option>
                   {locations.map(loc => (
                     <option key={loc.id} value={loc.id}>
-                      {loc.type === 'warehouse' ? '🏢' : '🎪'} {loc.name}
+                      {loc.name} ({loc.type === 'warehouse' ? 'Warehouse' : 'Event Tent'})
                     </option>
                   ))}
                 </select>
@@ -1641,14 +1914,26 @@ export default function App() {
                                             </strong>
                                           </td>
                                           <td style={{ textAlign: 'right' }}>
-                                            <button
-                                              type="button"
-                                              className="size-dispatch-btn"
-                                              onClick={() => handleQuickSelectStockSize(cat.category, cw.color, sz.size)}
-                                              disabled={isSzZero}
-                                            >
-                                              Dispatch
-                                            </button>
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '6px' }}>
+                                              <button
+                                                type="button"
+                                                className="size-dispatch-btn"
+                                                onClick={() => handleQuickSelectStockSize(cat.category, cw.color, sz.size)}
+                                                disabled={isSzZero}
+                                              >
+                                                Dispatch
+                                              </button>
+                                              {isWarehouse && (
+                                                <button
+                                                  type="button"
+                                                  className="restock-btn-tag"
+                                                  onClick={() => handleStartRestock(cat.category, cw.color, sz.size, sz.price)}
+                                                  title="Restock this item in Add Stock tab"
+                                                >
+                                                  + Restock
+                                                </button>
+                                              )}
+                                            </div>
                                           </td>
                                         </tr>
                                       );
@@ -2203,7 +2488,6 @@ export default function App() {
                 className={`add-stock-type-btn ${addStockType === 'apparel' ? 'active' : ''}`}
                 onClick={() => setAddStockType('apparel')}
               >
-                <span>👕</span>
                 <span>Apparel (Size Matrix)</span>
               </button>
               <button
@@ -2214,7 +2498,6 @@ export default function App() {
                   setAddSingleSize('One Size');
                 }}
               >
-                <span>🧢</span>
                 <span>Accessory (One Size)</span>
               </button>
               <button
@@ -2222,13 +2505,47 @@ export default function App() {
                 className={`add-stock-type-btn ${addStockType === 'single' ? 'active' : ''}`}
                 onClick={() => setAddStockType('single')}
               >
-                <span>⚡</span>
                 <span>Single / Custom Size</span>
               </button>
             </div>
           </div>
 
           <form className="form" onSubmit={handleAddStockSubmit}>
+            {!isWarehouse && (
+              <div style={{ padding: '10px 14px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: '14px', fontSize: '12px', color: 'var(--danger)', fontWeight: 600 }}>
+                Notice: Master inventory intake and product additions are restricted to Superadmin and Warehouse leads. Logged in as: {currentUser.name} (Event Merchant).
+              </div>
+            )}
+
+            {/* Quick Restock Dropdown for Depleted or Existing Catalog Items */}
+            <div className="field">
+              <span className="field-label">Quick Restock Existing</span>
+              <select
+                className="plain"
+                value=""
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  const [cat, col] = val.split('|');
+                  handleSelectAddCategory(cat);
+                  if (col) setAddColor(col);
+                  const item = catalog.find(c => c.category === cat && c.color === col);
+                  if (item && item.price > 0) setAddPrice(item.price.toString());
+                }}
+                style={{ fontWeight: 600, fontSize: '13px' }}
+                disabled={!isWarehouse}
+              >
+                <option value="">-- Choose existing product to restock --</option>
+                {stockHierarchy.map(c => (
+                  c.colorways.map(cw => (
+                    <option key={`${c.category}|${cw.color}`} value={`${c.category}|${cw.color}`}>
+                      {cw.totalRemaining <= 0 ? '[OUT OF STOCK] ' : ''}{c.category} ({cw.color}) — {cw.totalRemaining} pcs on hand
+                    </option>
+                  ))
+                ))}
+              </select>
+            </div>
+
             {/* Destination Selector */}
             <div className="field">
               <span className="field-label">Stock Destination</span>
@@ -2237,10 +2554,11 @@ export default function App() {
                 value={addStockDestination}
                 onChange={(e) => setAddStockDestination(e.target.value)}
                 style={{ fontWeight: 600, fontSize: '13px' }}
+                disabled={!isWarehouse}
               >
                 {locations.map(loc => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.type === 'warehouse' ? '🏢' : '🎪'} {loc.name}
+                    {loc.name} ({loc.type === 'warehouse' ? 'Warehouse' : 'Event Station'})
                   </option>
                 ))}
               </select>
@@ -2262,6 +2580,7 @@ export default function App() {
                   }
                 }}
                 style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '14px', fontWeight: 600 }}
+                disabled={!isWarehouse}
                 required
               />
             </div>
@@ -2275,8 +2594,9 @@ export default function App() {
                   className={`quick-chip-btn ${addCategory === cat ? 'active' : ''}`}
                   style={{ fontSize: '11px', padding: '3px 9px' }}
                   onClick={() => handleSelectAddCategory(cat)}
+                  disabled={!isWarehouse}
                 >
-                  {isAccessoryCategory(cat) ? '🧢' : '👕'} {cat}
+                  {cat}
                 </button>
               ))}
             </div>
@@ -2290,6 +2610,7 @@ export default function App() {
                 value={addColor}
                 onChange={(e) => setAddColor(e.target.value)}
                 style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '13px', fontWeight: 600 }}
+                disabled={!isWarehouse}
                 required
               />
             </div>
@@ -2303,6 +2624,7 @@ export default function App() {
                 value={addPrice}
                 onChange={(e) => setAddPrice(e.target.value)}
                 style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, width: '130px' }}
+                disabled={!isWarehouse}
                 required
               />
             </div>
@@ -2313,7 +2635,7 @@ export default function App() {
                 <div className="size-matrix-header">
                   <div>
                     <span className="field-label" style={{ fontWeight: 700, color: 'var(--ink)' }}>
-                      👕 Sized Inventory Matrix (XS &ndash; 5XL)
+                      Sized Inventory Matrix (XS &ndash; 5XL)
                     </span>
                     <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '2px 0 0 0' }}>
                       Type quantities directly into each size box &bull; Tab to jump to next size
@@ -2325,6 +2647,7 @@ export default function App() {
                       className="btn-action-small"
                       style={{ fontSize: '10px', padding: '2px 6px' }}
                       onClick={() => handleSetAllMultiSizes(5)}
+                      disabled={!isWarehouse}
                     >
                       +5 All
                     </button>
@@ -2333,6 +2656,7 @@ export default function App() {
                       className="btn-action-small"
                       style={{ fontSize: '10px', padding: '2px 6px' }}
                       onClick={() => handleSetAllMultiSizes(10)}
+                      disabled={!isWarehouse}
                     >
                       +10 All
                     </button>
@@ -2341,6 +2665,7 @@ export default function App() {
                       className="btn-action-small"
                       style={{ fontSize: '10px', padding: '2px 6px' }}
                       onClick={() => handleSetAllMultiSizes(25)}
+                      disabled={!isWarehouse}
                     >
                       +25 All
                     </button>
@@ -2349,6 +2674,7 @@ export default function App() {
                       className="btn-action-small refund"
                       style={{ fontSize: '10px', padding: '2px 6px' }}
                       onClick={() => handleSetAllMultiSizes(0)}
+                      disabled={!isWarehouse}
                     >
                       Clear
                     </button>
@@ -2371,6 +2697,7 @@ export default function App() {
                             const val = e.target.value;
                             setAddMultiSizes(prev => prev.map(p => p.size === szRow.size ? { ...p, quantity: val } : p));
                           }}
+                          disabled={!isWarehouse}
                         />
                         <span className="size-input-unit">pcs</span>
                       </div>
@@ -2383,14 +2710,11 @@ export default function App() {
             {/* MODE 2: ACCESSORY (NON-SIZED / ONE SIZE) */}
             {addStockType === 'accessory' && (
               <div className="size-matrix-container">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                  <span style={{ fontSize: '20px' }}>🧢</span>
-                  <div>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>Non-Sized Accessory / Merchandise</span>
-                    <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '1px 0 0 0' }}>
-                      Caps, bucket hats, bottles, and bags are recorded as a single <b>One Size</b> unit pool.
-                    </p>
-                  </div>
+                <div style={{ marginBottom: '12px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>Non-Sized Accessory / Merchandise</span>
+                  <p style={{ fontSize: '11px', color: 'var(--muted)', margin: '1px 0 0 0' }}>
+                    Caps, bucket hats, bottles, and bags are recorded as a single <b>One Size</b> unit pool.
+                  </p>
                 </div>
 
                 <div className="field" style={{ margin: 0, padding: '8px 0', borderTop: '1px solid var(--border)' }}>
@@ -2404,6 +2728,7 @@ export default function App() {
                           className="btn-action-small"
                           style={{ fontSize: '10px', padding: '2px 6px' }}
                           onClick={() => setAddSingleQty(amt.toString())}
+                          disabled={!isWarehouse}
                         >
                           +{amt}
                         </button>
@@ -2416,6 +2741,7 @@ export default function App() {
                       value={addSingleQty}
                       onChange={(e) => setAddSingleQty(e.target.value)}
                       style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontFamily: 'IBM Plex Mono', fontSize: '16px', fontWeight: 700, width: '100px' }}
+                      disabled={!isWarehouse}
                       required
                     />
                     <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>pcs</span>
@@ -2428,7 +2754,7 @@ export default function App() {
             {addStockType === 'single' && (
               <div className="size-matrix-container">
                 <span className="field-label" style={{ display: 'block', marginBottom: '8px', fontWeight: 700 }}>
-                  ⚡ Custom / Individual Size Entry
+                  Custom / Individual Size Entry
                 </span>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
                   <div>
@@ -2439,6 +2765,7 @@ export default function App() {
                       value={addSingleSize}
                       onChange={(e) => setAddSingleSize(e.target.value)}
                       style={{ width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '13px', fontWeight: 600, outline: 'none' }}
+                      disabled={!isWarehouse}
                       required
                     />
                   </div>
@@ -2451,6 +2778,7 @@ export default function App() {
                       value={addSingleQty}
                       onChange={(e) => setAddSingleQty(e.target.value)}
                       style={{ width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--panel)', fontFamily: 'IBM Plex Mono', fontSize: '14px', fontWeight: 700, outline: 'none' }}
+                      disabled={!isWarehouse}
                       required
                     />
                   </div>
@@ -2488,11 +2816,13 @@ export default function App() {
               type="submit"
               className="submit"
               style={{ padding: '12px', fontSize: '14px' }}
-              disabled={isPending || totalAddUnits <= 0}
+              disabled={isPending || !isWarehouse || totalAddUnits <= 0}
             >
-              {addStockType === 'apparel'
-                ? `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Sized Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`
-                : `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`}
+              {!isWarehouse
+                ? 'Action Restricted to Warehouse Leads'
+                : addStockType === 'apparel'
+                  ? `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Sized Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`
+                  : `Add ${totalAddUnits > 0 ? totalAddUnits : ''} Units to ${locations.find(l => l.id === addStockDestination)?.name || 'Warehouse'}`}
             </button>
           </form>
         </div>
@@ -2502,41 +2832,201 @@ export default function App() {
       {/* TAB 5: SETTINGS & TOOLS */}
       {/* ========================================================================= */}
       {activeTab === 'settings' && (
-        <div className="card">
-          <div className="card-head">Settings & Data Management</div>
-          <div className="form">
-            <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
-              Reset sample scenarios or clear data.
-            </p>
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (confirm("Reset database with standard sample data?")) {
-                    await resetDatabaseAction();
-                    await loadAllData();
-                  }
-                }}
-                className="btn-action-small"
-                style={{ padding: '8px 14px' }}
-              >
-                Restore Sample Data
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (confirm("Clear all data for a clean run?")) {
-                    await clearAllDataAction();
-                    await loadAllData();
-                  }
-                }}
-                className="btn-action-small refund"
-                style={{ padding: '8px 14px' }}
-              >
-                Clear All Data
-              </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* User Accounts & Permissions Panel */}
+          {isSuperadmin && (
+            <div className="card">
+              <div className="card-head">
+                <span>User Accounts & Permissions</span>
+                <span className="mono" style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                  {staffProfiles.length} active users
+                </span>
+              </div>
+
+              <div className="form">
+                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
+                  Manage staff credentials, roles, and assigned event stations.
+                </p>
+
+                {/* List of Current Users */}
+                <div style={{ marginBottom: '20px', overflowX: 'auto' }}>
+                  <table className="event-breakdown-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>PIN</th>
+                        <th>Assigned Station(s)</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffProfiles.map(s => {
+                        const isGriffin = s.id === 'usr-griffin';
+                        const assignedNames = s.assigned_location_ids.includes('*')
+                          ? 'All Stations (Global)'
+                          : s.assigned_location_ids.map(id => locations.find(l => l.id === id)?.name || id).join(', ') || 'None';
+
+                        return (
+                          <tr key={s.id}>
+                            <td style={{ fontWeight: 700 }}>{s.name}</td>
+                            <td className="mono">{s.username || s.id}</td>
+                            <td>
+                              <span className={`user-role-tag ${s.role}`}>
+                                {s.role === 'superadmin' ? 'Superadmin' : s.role === 'warehouse' ? 'Warehouse' : 'Merchant'}
+                              </span>
+                            </td>
+                            <td className="mono">{s.pin || '1234'}</td>
+                            <td style={{ fontSize: '12px', color: 'var(--muted)' }}>{assignedNames}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              {!isGriffin && (
+                                <button
+                                  type="button"
+                                  className="btn-action-small refund"
+                                  onClick={async () => {
+                                    if (confirm(`Delete account for ${s.name}?`)) {
+                                      await deleteStaffProfileAction(s.id);
+                                      await loadAllData();
+                                    }
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Add New User Form */}
+                <div style={{ padding: '16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 700, display: 'block', marginBottom: '12px' }}>
+                    + Add New Staff Member
+                  </span>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Full Name</span>
+                      <input
+                        type="text"
+                        placeholder="e.g. John Mwangi"
+                        value={newStaffName}
+                        onChange={(e) => setNewStaffName(e.target.value)}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Username</span>
+                      <input
+                        type="text"
+                        placeholder="e.g. john"
+                        value={newStaffUsername}
+                        onChange={(e) => setNewStaffUsername(e.target.value)}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Role</span>
+                      <select
+                        value={newStaffRole}
+                        onChange={(e) => setNewStaffRole(e.target.value as any)}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '12px' }}
+                      >
+                        <option value="event_staff">Event Merchant (Dispatch Only)</option>
+                        <option value="warehouse">Warehouse Lead</option>
+                        <option value="superadmin">Superadmin</option>
+                      </select>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Assigned Station</span>
+                      <select
+                        value={newStaffAssignedLoc}
+                        onChange={(e) => setNewStaffAssignedLoc(e.target.value)}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '12px' }}
+                      >
+                        <option value="*">All Stations (Global Access)</option>
+                        {locations.filter(l => l.type === 'event').map(l => (
+                          <option key={l.id} value={l.id}>{l.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="submit"
+                    style={{ width: 'auto', padding: '8px 16px', fontSize: '12px' }}
+                    onClick={async () => {
+                      if (!newStaffName.trim()) {
+                        alert("Please enter staff member name.");
+                        return;
+                      }
+                      try {
+                        await createStaffProfileAction({
+                          name: newStaffName.trim(),
+                          username: newStaffUsername.trim() || undefined,
+                          pin: newStaffPin.trim() || '1234',
+                          role: newStaffRole,
+                          assigned_location_ids: [newStaffAssignedLoc]
+                        });
+                        alert(`Created user account for ${newStaffName.trim()}!`);
+                        setNewStaffName('');
+                        setNewStaffUsername('');
+                        await loadAllData();
+                      } catch (err) {
+                        alert(`Error: ${(err as Error).message}`);
+                      }
+                    }}
+                  >
+                    Create User Account
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Data Reset Tools (Superadmin only) */}
+          {isSuperadmin && (
+            <div className="card">
+              <div className="card-head">Data Management & Sample Data</div>
+              <div className="form">
+                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
+                  Reset sample scenarios or clear data.
+                </p>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (confirm("Reset database with standard sample data?")) {
+                        await resetDatabaseAction();
+                        await loadAllData();
+                      }
+                    }}
+                    className="btn-action-small"
+                    style={{ padding: '8px 14px' }}
+                  >
+                    Restore Sample Data
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (confirm("Clear all data for a clean run?")) {
+                        await clearAllDataAction();
+                        await loadAllData();
+                      }
+                    }}
+                    className="btn-action-small refund"
+                    style={{ padding: '8px 14px' }}
+                  >
+                    Clear All Data
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
