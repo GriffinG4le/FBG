@@ -26,7 +26,10 @@ import {
   createStaffProfileAction,
   deleteStaffProfileAction,
   updateStaffProfileAction,
-  assignStaffToLocationAction
+  assignStaffToLocationAction,
+  changeUserPinAction,
+  resetStaffPinAction,
+  authenticateUserAction
 } from './actions';
 import {
   Location,
@@ -37,7 +40,8 @@ import {
   LedgerRow,
   StockOnHandItem,
   EventStockTransfer,
-  StaffProfile
+  StaffProfile,
+  getDefaultPasswordForUsername
 } from '../lib/db';
 
 type Tab = 'dashboard' | 'dispatch' | 'stock' | 'events' | 'add-stock' | 'settings';
@@ -174,6 +178,16 @@ export default function App() {
   const [whVerifyEventId, setWhVerifyEventId] = useState<string>('');
   const [whVerifyRows, setWhVerifyRows] = useState<{ sku: string; staffCount: number; whCount: string; expectedQty: number }[]>([]);
 
+  // Station PIN Security / Change PIN Modal State
+  const [pinModalOpen, setPinModalOpen] = useState<boolean>(false);
+  const [pinModalIsForced, setPinModalIsForced] = useState<boolean>(false);
+  const [pinCurrent, setPinCurrent] = useState<string>('');
+  const [pinNew, setPinNew] = useState<string>('');
+  const [pinConfirm, setPinConfirm] = useState<string>('');
+  const [pinError, setPinError] = useState<string>('');
+  const [pinSuccess, setPinSuccess] = useState<string>('');
+  const [pinIsPending, setPinIsPending] = useState<boolean>(false);
+
   const [isPending, startTransition] = useTransition();
 
   // Load Data
@@ -217,9 +231,52 @@ export default function App() {
     if (staffProfiles.length > 0 && !currentUser) {
       const savedId = typeof window !== 'undefined' ? localStorage.getItem('fbg_auth_user_id') : null;
       const found = staffProfiles.find(s => s.id === savedId) || staffProfiles.find(s => s.id === 'usr-griffin') || staffProfiles[0];
-      if (found) setCurrentUser(found);
+      if (found) {
+        setCurrentUser(found);
+      }
     }
   }, [staffProfiles, currentUser]);
+
+  const handlePinChangeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!pinCurrent) {
+      setPinError('Please enter your current password.');
+      return;
+    }
+    const cleanNew = pinNew.trim();
+    if (!cleanNew || cleanNew.length < 4) {
+      setPinError('New password must be at least 4 characters long.');
+      return;
+    }
+    const defaultPass = getDefaultPasswordForUsername(currentUser.username || currentUser.name);
+    if (cleanNew === '1234' || cleanNew === defaultPass || cleanNew.toLowerCase() === `${(currentUser.username || currentUser.name).toLowerCase()}@2026`) {
+      setPinError(`For security, you cannot use '${defaultPass}' or '1234'. Please choose a unique personal password.`);
+      return;
+    }
+    if (cleanNew !== pinConfirm.trim()) {
+      setPinError('New password and Confirm password do not match.');
+      return;
+    }
+
+    setPinIsPending(true);
+    setPinError('');
+    try {
+      const updated = await changeUserPinAction(currentUser.id, pinCurrent.trim(), cleanNew);
+      setCurrentUser(updated);
+      setPinSuccess('Password updated successfully!');
+      await loadAllData();
+      setTimeout(() => {
+        setPinModalOpen(false);
+        setPinSuccess('');
+        setPinIsPending(false);
+        setPinModalIsForced(false);
+      }, 1200);
+    } catch (err) {
+      setPinError((err as Error).message || 'Failed to update password.');
+      setPinIsPending(false);
+    }
+  };
 
   const isSuperadmin = currentUser?.role === 'superadmin' || currentUser?.role === 'admin';
   const isWarehouse = isSuperadmin || currentUser?.role === 'warehouse';
@@ -233,32 +290,73 @@ export default function App() {
     };
   }, [currentUser]);
 
+  const formatLocationLabel = (loc: Location) => {
+    if (!loc) return '';
+    if (loc.id === 'wh-main' || loc.type === 'warehouse') {
+      const name = loc.name.replace(/\(Warehouse\)/gi, '').trim();
+      return name.toLowerCase().includes('hq') ? name : `${name} (HQ)`;
+    }
+    return loc.name;
+  };
+
   const STANDARD_APPAREL_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
 
   const isAccessoryCategory = (category: string) => {
     const c = (category || '').toLowerCase().trim();
-    return c.includes('hat') || c.includes('cap') || c.includes('bag') || c.includes('ball') || c.includes('bottle') || c.includes('sticker') || c.includes('pin');
+    return (
+      c.includes('hat') ||
+      c.includes('cap') ||
+      c.includes('bag') ||
+      c.includes('ball') ||
+      c.includes('bottle') ||
+      c.includes('sticker') ||
+      c.includes('pin') ||
+      c.includes('sock') ||
+      c.includes('scarf') ||
+      c.includes('mug') ||
+      c.includes('wristband') ||
+      c.includes('band') ||
+      c.includes('lanyard') ||
+      c.includes('keychain') ||
+      c.includes('keyring') ||
+      c.includes('poster') ||
+      c.includes('flag') ||
+      c.includes('banner') ||
+      c.includes('towel') ||
+      c.includes('accessory')
+    );
   };
 
-  // Event Dispatch Dynamic Helpers
-  const eventDispatchAvailableColors = useMemo(() => {
-    return [...new Set(
-      catalog.filter(c => c.category === eventDispatchCategory).map(c => c.color || 'Standard')
-    )];
-  }, [catalog, eventDispatchCategory]);
+  const getAvailableSizesForCategory = (categoryName: string, colorName: string, catalogList: CatalogItem[]): string[] => {
+    if (!categoryName) return ['One Size'];
 
-  const eventDispatchAvailableSizes = useMemo(() => {
-    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'];
-    if (isAccessoryCategory(eventDispatchCategory)) {
-      return ['One Size'];
+    const cleanCat = categoryName.trim().toLowerCase();
+    const cleanCol = (colorName || '').trim().toLowerCase();
+
+    // 1. First attempt to match both category and color
+    let catItems = catalogList.filter(
+      c => (c.category || '').trim().toLowerCase() === cleanCat &&
+           (!cleanCol || cleanCol === 'standard' || (c.color || 'Standard').trim().toLowerCase() === cleanCol)
+    );
+
+    // If no items match category + specific color, search by category alone across catalog
+    if (catItems.length === 0) {
+      catItems = catalogList.filter(
+        c => (c.category || '').trim().toLowerCase() === cleanCat
+      );
     }
 
-    const foundSizes = catalog
-      .filter(c => c.category === eventDispatchCategory && (c.color || 'Standard') === eventDispatchColor)
-      .map(c => c.size || 'M');
+    const foundSizes = [...new Set(catItems.map(c => c.size || 'One Size').filter(Boolean))];
 
-    const combined = [...new Set([...STANDARD_APPAREL_SIZES, ...foundSizes])].filter(
-      s => s !== 'One Size' && s !== 'Standard' && s !== 'None'
+    // If explicitly an accessory or only has 'One Size' / 'Standard' / 'None' in catalog
+    if (isAccessoryCategory(categoryName) || (foundSizes.length > 0 && foundSizes.every(s => s === 'One Size' || s === 'Standard' || s === 'None'))) {
+      return foundSizes.length > 0 ? foundSizes : ['One Size'];
+    }
+
+    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'];
+    const baseSizes = foundSizes.length > 0 ? foundSizes : STANDARD_APPAREL_SIZES;
+    const combined = [...new Set(baseSizes)].filter(
+      s => s !== 'Standard' && s !== 'None'
     );
 
     return combined.sort((a, b) => {
@@ -267,23 +365,117 @@ export default function App() {
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
       return a.localeCompare(b);
     });
+  };
+
+  // Available Categories across entire catalog
+  const availableCategories = useMemo(() => {
+    return [...new Set(catalog.map(c => c.category))].filter(Boolean);
+  }, [catalog]);
+
+  // Event Dispatch Dynamic Helpers
+  const eventDispatchAvailableColors = useMemo(() => {
+    const cleanCat = (eventDispatchCategory || '').trim().toLowerCase();
+    const cols = [...new Set(
+      catalog
+        .filter(c => (c.category || '').trim().toLowerCase() === cleanCat)
+        .map(c => c.color || 'Standard')
+        .filter(Boolean)
+    )];
+    return cols.length > 0 ? cols : ['Standard'];
+  }, [catalog, eventDispatchCategory]);
+
+  const eventDispatchAvailableSizes = useMemo(() => {
+    return getAvailableSizesForCategory(eventDispatchCategory, eventDispatchColor, catalog);
   }, [catalog, eventDispatchCategory, eventDispatchColor]);
 
-  const getAvailableWarehouseStock = (cat: string, col: string, sz: string) => {
-    const sku = `${cat}|${col}|${sz}`;
-    const whItem = stockOnHand.find(s => (s.location_id === 'wh-main' || s.location_type === 'warehouse') && s.sku === sku);
-    if (whItem && whItem.stock_on_hand > 0) {
-      return whItem.stock_on_hand;
+  // Synchronize event dispatch category selection when catalog loads
+  useEffect(() => {
+    if (availableCategories.length > 0 && !availableCategories.includes(eventDispatchCategory)) {
+      setEventDispatchCategory(availableCategories[0]);
     }
+  }, [availableCategories, eventDispatchCategory]);
+
+  // Synchronize event dispatch color selection when available colors change
+  useEffect(() => {
+    if (eventDispatchAvailableColors.length > 0 && !eventDispatchAvailableColors.includes(eventDispatchColor)) {
+      setEventDispatchColor(eventDispatchAvailableColors[0]);
+    }
+  }, [eventDispatchAvailableColors, eventDispatchColor]);
+
+  // Synchronize event dispatch size selection when available sizes change
+  useEffect(() => {
+    if (eventDispatchAvailableSizes.length > 0 && !eventDispatchAvailableSizes.includes(eventDispatchSize)) {
+      setEventDispatchSize(eventDispatchAvailableSizes[0]);
+    }
+  }, [eventDispatchAvailableSizes, eventDispatchSize]);
+
+  const getAvailableWarehouseStock = (cat: string, col: string, sz: string) => {
+    if (!cat) return 0;
+    const cleanCat = cat.trim().toLowerCase();
+    const cleanCol = (col || '').trim().toLowerCase();
+    const cleanSz = (sz || '').trim().toLowerCase();
+
+    const whLocIds = new Set(locations.filter(l => l.type === 'warehouse').map(l => l.id));
+    whLocIds.add('wh-main');
+
+    // 1. Direct match in stockOnHand for warehouse locations
+    const whStocks = stockOnHand.filter(s => {
+      const isWh = whLocIds.has(s.location_id) || s.location_type === 'warehouse';
+      if (!isWh) return false;
+
+      const [sCat = '', sCol = '', sSz = ''] = (s.sku || '').split('|').map(p => p.trim().toLowerCase());
+      
+      const catMatch = sCat === cleanCat;
+      const colMatch = !cleanCol || cleanCol === 'standard' ? true : sCol === cleanCol;
+      const szMatch = !cleanSz || cleanSz === 'one size' ? (sSz === 'one size' || sSz === cleanSz || sSz === 'standard') : sSz === cleanSz;
+
+      return catMatch && colMatch && szMatch;
+    });
+
+    const totalOnHand = whStocks.reduce((sum, s) => sum + (s.stock_on_hand || 0), 0);
+    if (totalOnHand > 0) {
+      return totalOnHand;
+    }
+
+    // 2. Direct match across all warehouse ledger records
+    const whLedger = ledger.filter(l => {
+      if (!whLocIds.has(l.location_id)) return false;
+      const [lCat = '', lCol = '', lSz = ''] = (l.sku || '').split('|').map(p => p.trim().toLowerCase());
+      const catMatch = lCat === cleanCat;
+      const colMatch = !cleanCol || cleanCol === 'standard' ? true : lCol === cleanCol;
+      const szMatch = !cleanSz || cleanSz === 'one size' ? (lSz === 'one size' || lSz === cleanSz || lSz === 'standard') : lSz === cleanSz;
+      return catMatch && colMatch && szMatch;
+    });
+
+    const ledgerWhStock = whLedger.reduce((sum, l) => sum + (l.quantity_delta || 0), 0);
+    if (ledgerWhStock > 0) {
+      return ledgerWhStock;
+    }
+
+    // 3. Overall ledger fallback (StockIn / Transfer in minus Dispatches to events)
     const totalIn = ledger
-      .filter(l => l.sku === sku && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0)))
-      .reduce((sum, l) => sum + l.quantity_delta, 0);
-    const totalOut = Math.abs(
+      .filter(l => {
+        const [lCat = '', lCol = '', lSz = ''] = (l.sku || '').split('|').map(p => p.trim().toLowerCase());
+        const catMatch = lCat === cleanCat;
+        const colMatch = !cleanCol || cleanCol === 'standard' ? true : lCol === cleanCol;
+        const szMatch = !cleanSz || cleanSz === 'one size' ? (lSz === 'one size' || lSz === cleanSz || lSz === 'standard') : lSz === cleanSz;
+        return catMatch && colMatch && szMatch && (l.type === 'StockIn' || (l.type === 'Transfer' && l.quantity_delta > 0));
+      })
+      .reduce((sum, l) => sum + (l.quantity_delta || 0), 0);
+
+    const totalDispatched = Math.abs(
       ledger
-        .filter(l => l.sku === sku && l.type === 'Dispatch')
-        .reduce((sum, l) => sum + l.quantity_delta, 0)
+        .filter(l => {
+          const [lCat = '', lCol = '', lSz = ''] = (l.sku || '').split('|').map(p => p.trim().toLowerCase());
+          const catMatch = lCat === cleanCat;
+          const colMatch = !cleanCol || cleanCol === 'standard' ? true : lCol === cleanCol;
+          const szMatch = !cleanSz || cleanSz === 'one size' ? (lSz === 'one size' || lSz === cleanSz || lSz === 'standard') : lSz === cleanSz;
+          return catMatch && colMatch && szMatch && l.type === 'Dispatch';
+        })
+        .reduce((sum, l) => sum + (l.quantity_delta || 0), 0)
     );
-    return Math.max(0, totalIn - totalOut);
+
+    return Math.max(0, totalIn - totalDispatched);
   };
 
   const eventStationSummaries = useMemo(() => {
@@ -382,38 +574,42 @@ export default function App() {
     };
   }, [locations, selectedLocationId]);
 
-  // Categories and colors
-  const availableCategories = useMemo(() => {
-    return [...new Set(catalog.map(c => c.category))].filter(Boolean);
-  }, [catalog]);
-
+  // Walk-up Handover Dynamic Helpers
   const availableColors = useMemo(() => {
-    return [...new Set(
-      catalog.filter(c => c.category === selectedCategory).map(c => c.color || 'Standard')
+    const cleanCat = (selectedCategory || '').trim().toLowerCase();
+    const cols = [...new Set(
+      catalog
+        .filter(c => (c.category || '').trim().toLowerCase() === cleanCat)
+        .map(c => c.color || 'Standard')
+        .filter(Boolean)
     )];
+    return cols.length > 0 ? cols : ['Standard'];
   }, [catalog, selectedCategory]);
 
   const availableSizes = useMemo(() => {
-    const order = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'One Size'];
-    if (isAccessoryCategory(selectedCategory)) {
-      return ['One Size'];
-    }
-
-    const foundSizes = catalog
-      .filter(c => c.category === selectedCategory && (c.color || 'Standard') === selectedColor)
-      .map(c => c.size || 'M');
-
-    const combined = [...new Set([...STANDARD_APPAREL_SIZES, ...foundSizes])].filter(
-      s => s !== 'One Size' && s !== 'Standard' && s !== 'None'
-    );
-
-    return combined.sort((a, b) => {
-      const idxA = order.indexOf(a);
-      const idxB = order.indexOf(b);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      return a.localeCompare(b);
-    });
+    return getAvailableSizesForCategory(selectedCategory, selectedColor, catalog);
   }, [catalog, selectedCategory, selectedColor]);
+
+  // Synchronize walk-up handover category selection when catalog loads
+  useEffect(() => {
+    if (availableCategories.length > 0 && !availableCategories.includes(selectedCategory)) {
+      setSelectedCategory(availableCategories[0]);
+    }
+  }, [availableCategories, selectedCategory]);
+
+  // Synchronize walk-up handover color selection when available colors change
+  useEffect(() => {
+    if (availableColors.length > 0 && !availableColors.includes(selectedColor)) {
+      setSelectedColor(availableColors[0]);
+    }
+  }, [availableColors, selectedColor]);
+
+  // Synchronize walk-up handover size selection when available sizes change
+  useEffect(() => {
+    if (availableSizes.length > 0 && !availableSizes.includes(selectedSize)) {
+      setSelectedSize(availableSizes[0]);
+    }
+  }, [availableSizes, selectedSize]);
 
   const currentSelectedSku = useMemo(() => {
     return `${selectedCategory}|${selectedColor}|${selectedSize}`;
@@ -687,13 +883,24 @@ export default function App() {
   };
 
   const handleQuickSelectStockSize = (category: string, color: string, size: string) => {
+    // 1. Populate Walk-up Handover state
     setSelectedCategory(category);
-    const availableCols = [...new Set(catalog.filter(c => c.category === category).map(c => c.color || 'Standard'))];
-    if (availableCols.includes(color)) {
-      setSelectedColor(color);
+    setSelectedColor(color || 'Standard');
+    setSelectedSize(size || 'One Size');
+
+    // 2. Populate Event Dispatch state
+    setEventDispatchCategory(category);
+    setEventDispatchColor(color || 'Standard');
+    setEventDispatchSize(size || 'One Size');
+    setEventDispatchMode('single');
+
+    // Default target event if not selected yet
+    const eventLocs = locations.filter(l => l.type === 'event');
+    if (eventLocs.length > 0 && !eventDispatchEventId) {
+      setEventDispatchEventId(eventLocs[0].id);
     }
-    setSelectedSize(size);
-    setActiveTab('dispatch');
+
+    setActiveTab('events');
   };
 
   // Logged Sales List (Searchable)
@@ -856,19 +1063,22 @@ export default function App() {
   // Helpers for Add Stock Form
   const handleSelectAddCategory = (catName: string) => {
     setAddCategory(catName);
-    if (isAccessoryCategory(catName)) {
+    const catItems = catalog.filter(c => c.category === catName);
+    const hasApparelSizes = catItems.some(c => c.size && STANDARD_APPAREL_SIZES.includes(c.size));
+
+    if (isAccessoryCategory(catName) || (!hasApparelSizes && catItems.length > 0)) {
       setAddStockType('accessory');
-      setAddSingleSize('One Size');
+      setAddSingleSize(catItems[0]?.size || 'One Size');
     } else {
       if (addStockType === 'accessory') {
         setAddStockType('apparel');
       }
     }
-    const cols = [...new Set(catalog.filter(c => c.category === catName).map(c => c.color || 'Standard'))];
+    const cols = [...new Set(catItems.map(c => c.color || 'Standard'))];
     if (cols.length > 0 && cols[0]) {
       setAddColor(cols[0]);
     }
-    const item = catalog.find(c => c.category === catName);
+    const item = catItems[0];
     if (item && item.price > 0) {
       setAddPrice(item.price.toString());
     }
@@ -972,28 +1182,30 @@ export default function App() {
         <div className="auth-card">
           <div className="auth-brand">
             <div className="auth-mark display">FBG</div>
-            <h1 className="auth-title">Fulfilled by Griphine</h1>
             <p className="auth-subtitle">Live Event Inventory & Handover Portal</p>
           </div>
 
-          <form className="auth-form" onSubmit={(e) => {
+          <form className="auth-form" onSubmit={async (e) => {
             e.preventDefault();
-            const target = staffProfiles.find(s =>
-              (s.username && s.username.toLowerCase() === loginUsername.toLowerCase().trim()) ||
-              s.name.toLowerCase() === loginUsername.toLowerCase().trim()
-            );
-            if (!target) {
-              setLoginError('User account not found.');
-              return;
-            }
-            if (target.pin && target.pin !== loginPin.trim() && loginPin.trim() !== '1234') {
-              setLoginError('Incorrect PIN. Default is 1234.');
-              return;
-            }
             setLoginError('');
-            setCurrentUser(target);
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('fbg_auth_user_id', target.id);
+            try {
+              const target = await authenticateUserAction(loginUsername, loginPin);
+              setCurrentUser(target);
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('fbg_auth_user_id', target.id);
+              }
+              const defaultPass = getDefaultPasswordForUsername(target.username || target.name);
+              if (target.must_change_pin || loginPin.trim() === defaultPass || loginPin.trim() === '1234') {
+                setPinCurrent(loginPin.trim());
+                setPinNew('');
+                setPinConfirm('');
+                setPinError('');
+                setPinSuccess('');
+                setPinModalIsForced(true);
+                setPinModalOpen(true);
+              }
+            } catch (err) {
+              setLoginError((err as Error).message || 'Invalid username or password.');
             }
           }}>
             {loginError && (
@@ -1015,12 +1227,12 @@ export default function App() {
             </div>
 
             <div className="auth-input-group">
-              <label className="auth-input-label">Station PIN (Default: 1234)</label>
+              <label className="auth-input-label">Password (Default: username@2026)</label>
               <input
                 type="password"
-                maxLength={8}
+                maxLength={30}
                 className="auth-input mono"
-                placeholder="••••"
+                placeholder="••••••••"
                 value={loginPin}
                 onChange={(e) => setLoginPin(e.target.value)}
                 required
@@ -1034,24 +1246,25 @@ export default function App() {
 
           <div className="auth-quick-logins">
             <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase' }}>
-              Quick Sign-In
+              Quick Select Account
             </span>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {staffProfiles.map(s => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="btn-action-small"
-                  onClick={() => {
-                    setCurrentUser(s);
-                    if (typeof window !== 'undefined') {
-                      localStorage.setItem('fbg_auth_user_id', s.id);
-                    }
-                  }}
-                >
-                  {s.name} ({s.role === 'superadmin' ? 'Superadmin' : s.role === 'warehouse' ? 'Warehouse' : 'Merchant'})
-                </button>
-              ))}
+              {staffProfiles.map(s => {
+                const defaultPass = getDefaultPasswordForUsername(s.username || s.name);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="btn-action-small"
+                    onClick={() => {
+                      setLoginUsername(s.username || s.name);
+                      setLoginPin(defaultPass);
+                    }}
+                  >
+                    {s.name} ({s.role === 'superadmin' ? 'Superadmin' : s.role === 'warehouse' ? 'Warehouse' : 'Merchant'})
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -1070,9 +1283,6 @@ export default function App() {
       <header>
         <div className="brand">
           <div className="mark display">FBG</div>
-          <div className="brand-name">
-            Fulfilled by <b>Griphine</b>
-          </div>
         </div>
         <div className="header-right">
           <div className="live-indicator">
@@ -1087,7 +1297,7 @@ export default function App() {
             >
               {allowedLocations.map(loc => (
                 <option key={loc.id} value={loc.id}>
-                  {loc.name}
+                  {formatLocationLabel(loc)}
                 </option>
               ))}
             </select>
@@ -1099,6 +1309,23 @@ export default function App() {
                 {currentUser.role === 'superadmin' ? 'Superadmin' : currentUser.role === 'warehouse' ? 'Warehouse' : 'Merchant'}
               </span>
             </div>
+            <button
+              type="button"
+              className="btn-action-small"
+              style={{ fontSize: '11px', padding: '3px 8px', borderRadius: 'var(--radius-sm)' }}
+              onClick={() => {
+                setPinCurrent('');
+                setPinNew('');
+                setPinConfirm('');
+                setPinError('');
+                setPinSuccess('');
+                setPinModalIsForced(false);
+                setPinModalOpen(true);
+              }}
+              title="Change Station PIN / Password"
+            >
+              🔑 Change PIN
+            </button>
             <button
               type="button"
               className="btn-logout"
@@ -1397,7 +1624,12 @@ export default function App() {
                       const cat = e.target.value;
                       setSelectedCategory(cat);
                       const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
-                      if (cols.length > 0) setSelectedColor(cols[0]);
+                      const newCol = cols.length > 0 ? cols[0] : 'Standard';
+                      setSelectedColor(newCol);
+                      const sizes = getAvailableSizesForCategory(cat, newCol, catalog);
+                      if (sizes.length > 0) {
+                        setSelectedSize(sizes[0]);
+                      }
                     }}
                   >
                     {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1409,7 +1641,14 @@ export default function App() {
                     className="plain"
                     style={{ width: '100%' }}
                     value={selectedColor}
-                    onChange={(e) => setSelectedColor(e.target.value)}
+                    onChange={(e) => {
+                      const newCol = e.target.value;
+                      setSelectedColor(newCol);
+                      const sizes = getAvailableSizesForCategory(selectedCategory, newCol, catalog);
+                      if (sizes.length > 0 && !sizes.includes(selectedSize)) {
+                        setSelectedSize(sizes[0]);
+                      }
+                    }}
                   >
                     {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -1417,18 +1656,25 @@ export default function App() {
               </div>
 
               {/* Size Buttons */}
-              {/* Size Buttons */}
               <div style={{ marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <span className="field-label">Select Size</span>
                   {(() => {
                     const sku = `${selectedCategory}|${selectedColor}|${selectedSize}`;
                     const count = getStockCount(sku);
+                    const whCount = getAvailableWarehouseStock(selectedCategory, selectedColor, selectedSize);
                     const isZero = count <= 0;
                     return (
-                      <span className="mono" style={{ fontSize: '11px', fontWeight: 600, color: isZero ? 'var(--danger)' : 'var(--muted)' }}>
-                        {count} pcs on hand at {activeLocation.name}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className="mono" style={{ fontSize: '11px', fontWeight: 600, color: isZero ? 'var(--danger)' : 'var(--muted)' }}>
+                          {count} pcs on hand at {activeLocation.name}
+                        </span>
+                        {whCount > 0 && activeLocation.type === 'event' && (
+                          <span className="mono" style={{ fontSize: '11px', color: 'var(--amber)', fontWeight: 600 }}>
+                            ({whCount} in warehouse)
+                          </span>
+                        )}
+                      </div>
                     );
                   })()}
                 </div>
@@ -1675,13 +1921,13 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <h2 className="stock-title display" style={{ margin: 0 }}>Current Stock</h2>
                 <span className="badge" style={{ fontSize: '11px', background: 'var(--border)', color: 'var(--ink)' }}>
-                  {stockLocationFilter === 'all' ? 'Company-Wide (All Locations)' : locations.find(l => l.id === stockLocationFilter)?.name || 'Filtered Location'}
+                  {stockLocationFilter === 'all' ? 'Company-Wide (All Locations)' : (locations.find(l => l.id === stockLocationFilter) ? formatLocationLabel(locations.find(l => l.id === stockLocationFilter)!) : 'Filtered Location')}
                 </span>
               </div>
               <p className="stock-subtitle" style={{ marginTop: '4px' }}>
                 {stockLocationFilter === 'all'
                   ? 'Total company-wide inventory across central warehouse and all event stations.'
-                  : `Showing physical stock on hand at ${locations.find(l => l.id === stockLocationFilter)?.name || 'this location'}.`}
+                  : `Showing physical stock on hand at ${locations.find(l => l.id === stockLocationFilter) ? formatLocationLabel(locations.find(l => l.id === stockLocationFilter)!) : 'this location'}.`}
               </p>
             </div>
 
@@ -1697,7 +1943,7 @@ export default function App() {
                   <option value="all">All Locations (Global Total)</option>
                   {locations.map(loc => (
                     <option key={loc.id} value={loc.id}>
-                      {loc.name} ({loc.type === 'warehouse' ? 'Warehouse' : 'Event Tent'})
+                      {formatLocationLabel(loc)}
                     </option>
                   ))}
                 </select>
@@ -2131,8 +2377,18 @@ export default function App() {
                       onChange={(e) => {
                         const cat = e.target.value;
                         setEventDispatchCategory(cat);
-                        const cols = [...new Set(catalog.filter(c => c.category === cat).map(c => c.color || 'Standard'))];
-                        if (cols.length > 0) setEventDispatchColor(cols[0]);
+                        const cleanCat = cat.trim().toLowerCase();
+                        const cols = [...new Set(
+                          catalog
+                            .filter(c => (c.category || '').trim().toLowerCase() === cleanCat)
+                            .map(c => c.color || 'Standard')
+                        )];
+                        const newCol = cols.length > 0 ? cols[0] : 'Standard';
+                        setEventDispatchColor(newCol);
+                        const sizes = getAvailableSizesForCategory(cat, newCol, catalog);
+                        if (sizes.length > 0) {
+                          setEventDispatchSize(sizes[0]);
+                        }
                       }}
                     >
                       {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -2144,7 +2400,14 @@ export default function App() {
                       className="plain"
                       style={{ width: '100%' }}
                       value={eventDispatchColor}
-                      onChange={(e) => setEventDispatchColor(e.target.value)}
+                      onChange={(e) => {
+                        const newCol = e.target.value;
+                        setEventDispatchColor(newCol);
+                        const sizes = getAvailableSizesForCategory(eventDispatchCategory, newCol, catalog);
+                        if (sizes.length > 0 && !sizes.includes(eventDispatchSize)) {
+                          setEventDispatchSize(sizes[0]);
+                        }
+                      }}
                     >
                       {eventDispatchAvailableColors.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
@@ -2169,7 +2432,7 @@ export default function App() {
 
                     {/* Live Available Stock Math */}
                     <div className="field">
-                      <span className="field-label">Available in Stock</span>
+                      <span className="field-label">Available in Warehouse</span>
                       {(() => {
                         const avail = getAvailableWarehouseStock(eventDispatchCategory, eventDispatchColor, eventDispatchSize);
                         const isLow = avail > 0 && avail <= 10;
@@ -2177,7 +2440,7 @@ export default function App() {
                         return (
                           <div className={`stock-avail-badge ${isZero ? 'zero' : isLow ? 'low' : ''}`}>
                             <span className="live-dot" style={{ background: isZero ? 'var(--danger)' : isLow ? 'var(--amber)' : 'var(--success)' }} />
-                            <span>{avail} pcs available in shop</span>
+                            <span>{avail} pcs available in warehouse</span>
                           </div>
                         );
                       })()}
@@ -2219,7 +2482,7 @@ export default function App() {
                 {eventDispatchMode === 'batch' && (
                   <div>
                     <span className="field-label" style={{ display: 'block', margin: '8px 0 4px 0' }}>
-                      Allocate Quantities by Size:
+                      Allocate Quantities by Size (From Warehouse):
                     </span>
                     <div className="multi-alloc-grid">
                       {eventDispatchAvailableSizes.map(sz => {
@@ -2229,7 +2492,7 @@ export default function App() {
                         return (
                           <div key={sz} className="multi-alloc-box">
                             <span className="multi-alloc-size">{sz}</span>
-                            <span className="multi-alloc-avail">{avail} avail</span>
+                            <span className="multi-alloc-avail">{avail} in wh</span>
                             <input
                               type="number"
                               min="0"
@@ -2519,7 +2782,7 @@ export default function App() {
 
             {/* Quick Restock Dropdown for Depleted or Existing Catalog Items */}
             <div className="field">
-              <span className="field-label">Quick Restock Existing</span>
+              <span className="field-label">Existing Stock</span>
               <select
                 className="plain"
                 value=""
@@ -2535,7 +2798,7 @@ export default function App() {
                 style={{ fontWeight: 600, fontSize: '13px' }}
                 disabled={!isWarehouse}
               >
-                <option value="">-- Choose existing product to restock --</option>
+                <option value="">-- Existing Stock --</option>
                 {stockHierarchy.map(c => (
                   c.colorways.map(cw => (
                     <option key={`${c.category}|${cw.color}`} value={`${c.category}|${cw.color}`}>
@@ -2558,7 +2821,7 @@ export default function App() {
               >
                 {locations.map(loc => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name} ({loc.type === 'warehouse' ? 'Warehouse' : 'Event Station'})
+                    {formatLocationLabel(loc)}
                   </option>
                 ))}
               </select>
@@ -2877,23 +3140,67 @@ export default function App() {
                                 {s.role === 'superadmin' ? 'Superadmin' : s.role === 'warehouse' ? 'Warehouse' : 'Merchant'}
                               </span>
                             </td>
-                            <td className="mono">{s.pin || '1234'}</td>
+                            <td className="mono">
+                              {s.pin || '1234'}
+                              {s.must_change_pin && (
+                                <span style={{ fontSize: '10px', marginLeft: '6px', color: 'var(--amber)', fontWeight: 600 }}>
+                                  (Reset)
+                                </span>
+                              )}
+                            </td>
                             <td style={{ fontSize: '12px', color: 'var(--muted)' }}>{assignedNames}</td>
                             <td style={{ textAlign: 'right' }}>
-                              {!isGriffin && (
-                                <button
-                                  type="button"
-                                  className="btn-action-small refund"
-                                  onClick={async () => {
-                                    if (confirm(`Delete account for ${s.name}?`)) {
-                                      await deleteStaffProfileAction(s.id);
-                                      await loadAllData();
-                                    }
-                                  }}
-                                >
-                                  Delete
-                                </button>
-                              )}
+                              <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                                {s.id === currentUser.id && (
+                                  <button
+                                    type="button"
+                                    className="btn-action-small"
+                                    onClick={() => {
+                                      setPinCurrent('');
+                                      setPinNew('');
+                                      setPinConfirm('');
+                                      setPinError('');
+                                      setPinSuccess('');
+                                      setPinModalIsForced(false);
+                                      setPinModalOpen(true);
+                                    }}
+                                    title="Change your station login PIN"
+                                  >
+                                    Change PIN
+                                  </button>
+                                )}
+                                {isSuperadmin && !isGriffin && s.id !== currentUser.id && (
+                                  <button
+                                    type="button"
+                                    className="btn-action-small"
+                                    onClick={async () => {
+                                      const defaultP = getDefaultPasswordForUsername(s.username || s.name);
+                                      if (confirm(`Reset password for ${s.name} back to default (${defaultP})? They will be prompted to choose a new password upon next sign-in.`)) {
+                                        await resetStaffPinAction(s.id);
+                                        alert(`Reset password for ${s.name} to ${defaultP}.`);
+                                        await loadAllData();
+                                      }
+                                    }}
+                                    title={`Reset password to default (${getDefaultPasswordForUsername(s.username || s.name)})`}
+                                  >
+                                    Reset Password
+                                  </button>
+                                )}
+                                {!isGriffin && (
+                                  <button
+                                    type="button"
+                                    className="btn-action-small refund"
+                                    onClick={async () => {
+                                      if (confirm(`Delete account for ${s.name}?`)) {
+                                        await deleteStaffProfileAction(s.id);
+                                        await loadAllData();
+                                      }
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2948,8 +3255,8 @@ export default function App() {
                         style={{ width: '100%', padding: '6px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--panel)', fontSize: '12px' }}
                       >
                         <option value="*">All Stations (Global Access)</option>
-                        {locations.filter(l => l.type === 'event').map(l => (
-                          <option key={l.id} value={l.id}>{l.name}</option>
+                        {locations.map(l => (
+                          <option key={l.id} value={l.id}>{formatLocationLabel(l)}</option>
                         ))}
                       </select>
                     </div>
@@ -2968,11 +3275,12 @@ export default function App() {
                         await createStaffProfileAction({
                           name: newStaffName.trim(),
                           username: newStaffUsername.trim() || undefined,
-                          pin: newStaffPin.trim() || '1234',
+                          pin: newStaffPin.trim() || undefined,
                           role: newStaffRole,
                           assigned_location_ids: [newStaffAssignedLoc]
                         });
-                        alert(`Created user account for ${newStaffName.trim()}!`);
+                        const def = getDefaultPasswordForUsername(newStaffUsername.trim() || newStaffName.trim());
+                        alert(`Created user account for ${newStaffName.trim()} with default password: ${def}`);
                         setNewStaffName('');
                         setNewStaffUsername('');
                         await loadAllData();
@@ -3126,8 +3434,134 @@ export default function App() {
         </div>
       )}
 
+      {/* ========================================================================= */}
+      {/* CHANGE PIN / SECURITY SETUP MODAL */}
+      {/* ========================================================================= */}
+      {pinModalOpen && currentUser && (
+        <div className="modal-overlay">
+          <div className="modal-box" style={{ maxWidth: '440px' }}>
+            <div className="card-head" style={{ padding: 0, marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--ink)' }}>
+                  {pinModalIsForced ? '🔐 Security Setup: Change Default PIN' : '🔑 Change Station PIN'}
+                </span>
+              </div>
+              {!pinModalIsForced && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinModalOpen(false);
+                    setPinError('');
+                    setPinSuccess('');
+                  }}
+                  style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: '13px', fontWeight: 600 }}
+                >
+                  Close
+                </button>
+              )}
+            </div>
+
+            {pinModalIsForced ? (
+              <div style={{ padding: '10px 12px', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: '14px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--danger)', marginBottom: '3px' }}>
+                  🔒 Password Change Required — First Login Setup
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--ink)', lineHeight: 1.4 }}>
+                  Your account is currently using the initial default password (<b>{getDefaultPasswordForUsername(currentUser.username || currentUser.name)}</b>). You must set your own private password to secure your account.
+                </div>
+              </div>
+            ) : (
+              <p style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '14px', lineHeight: 1.4 }}>
+                Update your private station login password for <b>{currentUser.name}</b> (<code>{currentUser.username || currentUser.id}</code>).
+              </p>
+            )}
+
+            {pinError && (
+              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', fontSize: '12px', borderRadius: 'var(--radius-sm)', fontWeight: 600, marginBottom: '12px' }}>
+                {pinError}
+              </div>
+            )}
+
+            {pinSuccess && (
+              <div style={{ padding: '8px 12px', background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', fontSize: '12px', borderRadius: 'var(--radius-sm)', fontWeight: 600, marginBottom: '12px' }}>
+                ✓ {pinSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handlePinChangeSubmit}>
+              <div className="field">
+                <span className="field-label">Current Password</span>
+                <input
+                  type="password"
+                  maxLength={30}
+                  className="mono"
+                  placeholder="••••••••"
+                  value={pinCurrent}
+                  onChange={(e) => setPinCurrent(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '14px', fontWeight: 600 }}
+                  required
+                />
+              </div>
+
+              <div className="field">
+                <span className="field-label">New Password</span>
+                <input
+                  type="password"
+                  maxLength={30}
+                  className="mono"
+                  placeholder="New personal password"
+                  value={pinNew}
+                  onChange={(e) => setPinNew(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '14px', fontWeight: 600 }}
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className="field">
+                <span className="field-label">Confirm New Password</span>
+                <input
+                  type="password"
+                  maxLength={30}
+                  className="mono"
+                  placeholder="Repeat new password"
+                  value={pinConfirm}
+                  onChange={(e) => setPinConfirm(e.target.value)}
+                  style={{ border: 'none', background: 'transparent', textAlign: 'right', outline: 'none', fontSize: '14px', fontWeight: 600 }}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                {!pinModalIsForced && (
+                  <button
+                    type="button"
+                    className="btn-action-small"
+                    style={{ flex: 1, padding: '10px 14px', fontSize: '13px', background: 'transparent', border: '1px solid var(--border)' }}
+                    onClick={() => {
+                      setPinModalOpen(false);
+                      setPinError('');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="submit"
+                  style={{ flex: 2, padding: '10px 14px', fontSize: '13px' }}
+                  disabled={pinIsPending}
+                >
+                  {pinIsPending ? 'Updating Password...' : 'Save New Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="footer-credit">
-        Fulfilled by Griphine &middot; Tent Fulfillment System
+        FBG &middot; Tent Fulfillment System
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 {
-  "name": "Fulfillment & Reconciliation System",
-  "short_name": "FBG Fulfill",
-  "description": "Offline-first fulfillment and inventory reconciliation system for Griphine.",
+  "name": "FBG - Tent Fulfillment & Inventory",
+  "short_name": "FBG",
+  "description": "Offline-first fulfillment and inventory reconciliation system for FBG.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",

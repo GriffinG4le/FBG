@@ -1,5 +1,40 @@
+import crypto from 'crypto';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { RawParsedOrder } from './csvParser';
+
+// ==============================================================================
+// Password Hashing & Security Utilities
+// ==============================================================================
+
+const PASSWORD_SALT = 'fbg_secure_salt_2026_v1';
+
+export function hashPassword(password: string): string {
+  const clean = (password || '').trim();
+  return crypto.createHash('sha256').update(`${PASSWORD_SALT}:${clean}`).digest('hex');
+}
+
+export function getDefaultPasswordForUsername(usernameOrName: string): string {
+  const clean = (usernameOrName || 'user').toLowerCase().trim().replace(/[^a-z0-9]+/g, '');
+  return `${clean || 'user'}@2026`;
+}
+
+export function verifyPassword(inputPassword: string, storedHashOrPlain: string): boolean {
+  const cleanInput = (inputPassword || '').trim();
+  if (!storedHashOrPlain) return false;
+
+  // 1. Direct hash match
+  const inputHashed = hashPassword(cleanInput);
+  if (inputHashed === storedHashOrPlain) {
+    return true;
+  }
+
+  // 2. Legacy plaintext match
+  if (storedHashOrPlain === cleanInput) {
+    return true;
+  }
+
+  return false;
+}
 
 // ==============================================================================
 // Type Definitions
@@ -90,6 +125,7 @@ export interface StaffProfile {
   name: string;
   username?: string;
   pin?: string;
+  must_change_pin?: boolean;
   role: 'superadmin' | 'admin' | 'warehouse' | 'event_staff';
   assigned_location_ids: string[];
 }
@@ -113,7 +149,7 @@ export interface EventStockTransfer {
 
 // Initial Standard Mock State for Fallback / Seeding
 const INITIAL_LOCATIONS: Location[] = [
-  { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() },
+  { id: 'wh-main', name: 'Nairobi HQ', type: 'warehouse', status: 'active', created_at: new Date().toISOString() },
   { id: 'evt-sp7s', name: 'SportPesa 7s Tent', type: 'event', status: 'active', created_at: new Date().toISOString() },
   { id: 'evt-driftwood', name: 'Driftwood 7s (Mombasa MSC)', type: 'event', status: 'active', created_at: new Date().toISOString() }
 ];
@@ -126,7 +162,7 @@ const INITIAL_PREFIXES: OrderPrefix[] = [
 ];
 
 const INITIAL_STAFF: StaffProfile[] = [
-  { id: 'usr-griffin', name: 'Griffin', username: 'griffin', pin: '1234', role: 'superadmin', assigned_location_ids: ['*'] }
+  { id: 'usr-griffin', name: 'Griffin', username: 'griffin', pin: hashPassword('griffin@2026'), must_change_pin: true, role: 'superadmin', assigned_location_ids: ['*'] }
 ];
 
 const INITIAL_CATALOG: CatalogItem[] = [
@@ -304,28 +340,36 @@ let memoryStaff = [...INITIAL_STAFF];
 
 // Helper to ensure SKU exists in catalog
 async function ensureSkuExists(sku: string, price: number = 0) {
-  if (!isSupabaseConfigured) {
-    if (!memoryCatalog.some(c => c.sku === sku)) {
-      const parts = sku.split('|');
-      memoryCatalog.push({
-        sku,
-        category: parts[0] || 'Unknown',
-        color: parts[1] || null,
-        size: parts[2] || null,
-        price,
-        low_stock_threshold: 10
-      });
+  const parts = sku.split('|');
+  const category = parts[0] || 'Unknown';
+  const color = parts[1] || 'Standard';
+  const size = parts[2] || 'One Size';
+
+  const catItem: CatalogItem = {
+    sku,
+    category,
+    color,
+    size,
+    price,
+    low_stock_threshold: 10
+  };
+
+  const existingIdx = memoryCatalog.findIndex(c => c.sku === sku);
+  if (existingIdx !== -1) {
+    if (price > 0 && memoryCatalog[existingIdx].price <= 0) {
+      memoryCatalog[existingIdx].price = price;
     }
+  } else {
+    memoryCatalog.push(catItem);
+  }
+
+  if (!isSupabaseConfigured) {
     return;
   }
 
   try {
     const { data } = await supabase.from('catalog').select('sku').eq('sku', sku).maybeSingle();
     if (!data) {
-      const parts = sku.split('|');
-      const category = parts[0] || 'Unknown';
-      const color = parts[1] || null;
-      const size = parts[2] || null;
       await supabase.from('catalog').insert({
         sku,
         category,
@@ -335,18 +379,8 @@ async function ensureSkuExists(sku: string, price: number = 0) {
         low_stock_threshold: 10
       });
     }
-  } catch {
-    if (!memoryCatalog.some(c => c.sku === sku)) {
-      const parts = sku.split('|');
-      memoryCatalog.push({
-        sku,
-        category: parts[0] || 'Unknown',
-        color: parts[1] || null,
-        size: parts[2] || null,
-        price,
-        low_stock_threshold: 10
-      });
-    }
+  } catch (e) {
+    console.warn("Supabase ensureSkuExists warning:", e);
   }
 }
 
@@ -447,18 +481,24 @@ export async function createStaffProfile(params: {
   name: string;
   username?: string;
   pin?: string;
+  must_change_pin?: boolean;
   role: 'superadmin' | 'admin' | 'warehouse' | 'event_staff';
   assigned_location_ids?: string[];
 }): Promise<StaffProfile> {
   const cleanName = params.name.trim();
   const slug = (params.username || cleanName).toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const id = `usr-${slug || Date.now().toString()}`;
+  const username = params.username ? params.username.trim().toLowerCase() : slug;
+  
+  const rawInitialPassword = params.pin ? params.pin.trim() : getDefaultPasswordForUsername(username);
+  const hashedPassword = hashPassword(rawInitialPassword);
 
   const newStaff: StaffProfile = {
     id,
     name: cleanName,
-    username: params.username ? params.username.trim().toLowerCase() : slug,
-    pin: params.pin ? params.pin.trim() : '1234',
+    username,
+    pin: hashedPassword,
+    must_change_pin: params.must_change_pin !== undefined ? params.must_change_pin : true,
     role: params.role,
     assigned_location_ids: params.assigned_location_ids || []
   };
@@ -509,6 +549,92 @@ export async function updateStaffProfile(staffId: string, updates: Partial<Staff
     }
   }
   return staff;
+}
+
+export async function changeUserPin(
+  staffId: string,
+  currentPin: string,
+  newPin: string
+): Promise<StaffProfile> {
+  const staff = memoryStaff.find(s => s.id === staffId);
+  if (!staff) throw new Error('Staff member not found');
+
+  const username = staff.username || staff.name.toLowerCase();
+  const defaultPass = getDefaultPasswordForUsername(username);
+
+  const expectedStored = staff.pin || hashPassword(defaultPass);
+  const isCorrect = verifyPassword(currentPin, expectedStored) || currentPin.trim() === '1234' || currentPin.trim() === defaultPass;
+
+  if (!isCorrect) {
+    throw new Error('Current password / PIN is incorrect.');
+  }
+
+  const cleanNewPin = newPin.trim();
+  if (!cleanNewPin || cleanNewPin.length < 4) {
+    throw new Error('New password must be at least 4 characters long.');
+  }
+
+  if (cleanNewPin === '1234' || cleanNewPin === defaultPass || cleanNewPin.toLowerCase() === `${username}@2026`) {
+    throw new Error(`You cannot use the default password '${defaultPass}' or '1234'. Please choose a unique personal password.`);
+  }
+
+  const hashedNew = hashPassword(cleanNewPin);
+
+  return await updateStaffProfile(staffId, {
+    pin: hashedNew,
+    must_change_pin: false
+  });
+}
+
+export async function resetStaffPin(staffId: string): Promise<StaffProfile> {
+  const staff = memoryStaff.find(s => s.id === staffId);
+  if (!staff) throw new Error('Staff member not found');
+
+  const username = staff.username || staff.name.toLowerCase();
+  const defaultPass = getDefaultPasswordForUsername(username);
+  const hashedDefault = hashPassword(defaultPass);
+
+  return await updateStaffProfile(staffId, {
+    pin: hashedDefault,
+    must_change_pin: true
+  });
+}
+
+export async function verifyAndAuthenticateStaff(
+  usernameOrName: string,
+  inputPassword: string
+): Promise<StaffProfile> {
+  const profiles = await getStaffProfiles();
+  const cleanInput = (usernameOrName || '').trim().toLowerCase();
+
+  const target = profiles.find(s =>
+    (s.username && s.username.toLowerCase() === cleanInput) ||
+    s.name.toLowerCase() === cleanInput
+  );
+
+  if (!target) {
+    throw new Error('Account not found. Please check username.');
+  }
+
+  const username = target.username || target.name.toLowerCase();
+  const defaultPass = getDefaultPasswordForUsername(username);
+  const cleanPass = (inputPassword || '').trim();
+
+  const storedPin = target.pin || hashPassword(defaultPass);
+  const isValid = verifyPassword(cleanPass, storedPin) || (cleanPass === defaultPass) || (cleanPass === '1234' && target.must_change_pin);
+
+  if (!isValid) {
+    throw new Error('Incorrect password or PIN.');
+  }
+
+  // If stored in DB as unhashed, upgrade it now in DB
+  if (storedPin === cleanPass) {
+    const upgradedHash = hashPassword(cleanPass);
+    await updateStaffProfile(target.id, { pin: upgradedHash });
+    target.pin = upgradedHash;
+  }
+
+  return target;
 }
 
 export async function assignStaffToLocation(staffId: string, locationId: string): Promise<StaffProfile> {
@@ -594,10 +720,29 @@ export async function getDerivedStockOnHand(locationId?: string): Promise<StockO
     ? locations.filter(l => l.id === locationId)
     : locations;
 
+  // Ensure all SKUs present in ledger are represented, even if not in catalog table
+  const catalogMap = new Map<string, CatalogItem>();
+  catalog.forEach(c => catalogMap.set(c.sku, c));
+
+  ledger.forEach(r => {
+    if (r.sku && !catalogMap.has(r.sku)) {
+      const parts = r.sku.split('|');
+      catalogMap.set(r.sku, {
+        sku: r.sku,
+        category: parts[0] || 'Unknown',
+        color: parts[1] || 'Standard',
+        size: parts[2] || 'One Size',
+        price: 0,
+        low_stock_threshold: 10
+      });
+    }
+  });
+
+  const fullCatalog = Array.from(catalogMap.values());
   const result: StockOnHandItem[] = [];
 
   for (const loc of targetLocations) {
-    for (const cat of catalog) {
+    for (const cat of fullCatalog) {
       const movements = ledger.filter(r => r.location_id === loc.id && r.sku === cat.sku);
       const stockOnHand = movements.reduce((sum, r) => sum + Number(r.quantity_delta || 0), 0);
 
@@ -915,7 +1060,8 @@ export async function dispatchBatchToEvent(
   eventId: string,
   items: { sku: string; quantity: number }[],
   staffId: string = 'Admin',
-  notes?: string
+  notes?: string,
+  fromLocationId: string = 'wh-main'
 ): Promise<EventStockTransfer[]> {
   const results: EventStockTransfer[] = [];
 
@@ -925,7 +1071,7 @@ export async function dispatchBatchToEvent(
       await allocateStockTransfer(
         item.sku,
         item.quantity,
-        'wh-main',
+        fromLocationId || 'wh-main',
         eventId,
         staffId,
         notes || `Event outbound dispatch`
@@ -1678,7 +1824,7 @@ export async function clearAllData(): Promise<void> {
   memoryCatalog = [];
   memoryStaff = [...INITIAL_STAFF];
   memoryLocations = [
-    { id: 'wh-main', name: 'Main Warehouse (Nairobi HQ)', type: 'warehouse', status: 'active', created_at: new Date().toISOString() }
+    { id: 'wh-main', name: 'Nairobi HQ', type: 'warehouse', status: 'active', created_at: new Date().toISOString() }
   ];
 }
 

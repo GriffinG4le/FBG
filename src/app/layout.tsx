@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Fulfillment & Reconciliation System",
-  description: "Offline-first fulfillment and inventory reconciliation system for Griphine.",
+  title: "FBG - Tent Fulfillment & Inventory",
+  description: "Offline-first fulfillment and inventory reconciliation system for FBG.",
   manifest: "/manifest.json",
 };
 

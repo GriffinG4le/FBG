@@ -33,6 +33,9 @@ import {
   createStaffProfile,
   deleteStaffProfile,
   updateStaffProfile,
+  changeUserPin,
+  resetStaffPin,
+  verifyAndAuthenticateStaff,
   assignStaffToLocation,
   Location,
   CatalogItem,
@@ -210,10 +213,11 @@ export async function dispatchBatchToEventAction(
   eventId: string,
   items: { sku: string; quantity: number }[],
   staffId?: string,
-  notes?: string
+  notes?: string,
+  fromLocationId?: string
 ): Promise<EventStockTransfer[]> {
   try {
-    return await dispatchBatchToEvent(eventId, items, staffId, notes);
+    return await dispatchBatchToEvent(eventId, items, staffId, notes, fromLocationId);
   } catch (error) {
     console.error("Failed to dispatch batch to event:", error);
     throw new Error("Failed to allocate and dispatch stock to event.");
@@ -436,5 +440,39 @@ export async function assignStaffToLocationAction(staffId: string, locationId: s
   } catch (error) {
     console.error("Failed to assign staff:", error);
     throw new Error("Failed to assign staff to location.");
+  }
+}
+
+export async function changeUserPinAction(
+  staffId: string,
+  currentPin: string,
+  newPin: string
+): Promise<StaffProfile> {
+  try {
+    return await changeUserPin(staffId, currentPin, newPin);
+  } catch (error) {
+    console.error("Failed to change PIN:", error);
+    throw new Error((error as Error).message || "Failed to update PIN.");
+  }
+}
+
+export async function resetStaffPinAction(staffId: string): Promise<StaffProfile> {
+  try {
+    return await resetStaffPin(staffId);
+  } catch (error) {
+    console.error("Failed to reset PIN:", error);
+    throw new Error((error as Error).message || "Failed to reset PIN.");
+  }
+}
+
+export async function authenticateUserAction(
+  username: string,
+  pinOrPassword: string
+): Promise<StaffProfile> {
+  try {
+    return await verifyAndAuthenticateStaff(username, pinOrPassword);
+  } catch (error) {
+    console.error("Authentication failed:", error);
+    throw new Error((error as Error).message || "Invalid login credentials.");
   }
 }
